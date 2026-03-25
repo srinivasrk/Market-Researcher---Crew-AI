@@ -1,0 +1,47 @@
+market_landscape_task:
+  description: >
+    Research the sector "{sector}" for equity investing as of {current_year}.
+    Tickers to exclude from this shortlist (user already received them as a primary pick
+    within the policy window; comma-separated or the word none): {excluded_tickers}.
+    If any exclusions are listed, do NOT include those tickers as candidates except as a
+    last resort with an explicit note. Use search to find major listed players, emerging
+    threats, regulatory or demand themes, and recent news. Produce a shortlist of 5–8
+    candidate tickers (exchange:ticker or US ticker as standard), each with a one-line
+    rationale and links/snippets from search supporting why it belongs in the list.
+  expected_output: >
+    Markdown sections: (1) Sector overview & key themes, (2) Table or bullet list of 5–8
+    candidate tickers with rationale and source hints, (3) Honest notes on uncertainty
+    or conflicting narratives.
+  agent: market_researcher
+
+financial_signals_task:
+  description: >
+    Using the candidate list from the previous task, search for each name and collect
+    public financial and market signals for "{sector}" in {current_year}:
+    latest revenue/earnings summaries, margin or growth commentary, notable balance-sheet
+    flags, recent guidance or surprises, and any widely reported valuation context.
+    If a symbol is unclear, resolve it via search before analyzing.
+  expected_output: >
+    Markdown: for each remaining candidate (you may drop 1–2 on thin data, with reason),
+    a compact subsection with bullet points—Financial snapshot, Bull case, Bear case,
+    Data confidence (high/medium/low). End with a comparison table across candidates.
+  agent: financial_analyst
+
+investment_recommendation_task:
+  description: >
+    Based strictly on the prior tasks' outputs, select ONE primary stock you would recommend
+    for investment exposure to "{sector}". You MUST NOT choose any ticker listed
+    as excluded (same list as earlier in the crew): {excluded_tickers}. If that is "none",
+    there are no exclusions. If every strong candidate is excluded, pick the next-best
+    eligible name and briefly state the constraint. Name ticker and company, explain thesis
+    in 3–5 bullets, list top 3 risks, suggest what would invalidate the thesis, and add a
+    short paragraph that this is educational research—not personalized financial, legal,
+    or tax advice.
+  expected_output: >
+    A structured object (Pydantic/JSON) with these exact fields: primary_ticker (symbol
+    only), company_name, thesis_bullets (3-5 strings), risks (exactly 3 strings),
+    invalidation_triggers (string), disclaimer (string), runner_up_ticker,
+    runner_up_rationale (one sentence), exclusion_constraint_note (string or null if N/A).
+    Populate every required field; use null only for exclusion_constraint_note when no
+    exclusion forced a compromise.
+  agent: investment_strategist
