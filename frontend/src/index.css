@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens — quick reference
+ * ---------------------------------------------------------------------------
+ * primary_container (accent)     #10B981
+ * on-surface (text, high)        #191c1e
+ * surface (base)                 #f7f9fb
+ * surface-container-lowest       #ffffff
+ * outline-variant @ 20%          #bbcabf → use `outline-ghost` utility
+ * radius DEFAULT                 0.25rem — Tailwind `rounded` (see --radius)
+ * ---------------------------------------------------------------------------
+ */
+
+@theme {
+  --color-primary-container: #10b981;
+  --color-on-surface: #191c1e;
+  --color-surface: #f7f9fb;
+  --color-surface-container-lowest: #ffffff;
+  --color-outline-variant: #bbcabf;
+  /* outline-variant at 20% opacity — “ghost” borders */
+  --color-outline-ghost: rgb(187 202 191 / 0.2);
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  body {
+    margin: 0;
+    min-height: 100vh;
+  }
+}
+
+/* Display headings (sector dashboard hero, card titles) */
+@layer utilities {
+  .font-outfit {
+    font-family: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  }
+}

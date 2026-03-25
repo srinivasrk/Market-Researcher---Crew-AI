@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -43,13 +44,37 @@ def _synthetic_dev_claims() -> dict[str, Any]:
     }
 
 
+def _dev_password_login_enabled() -> bool:
+    val = os.getenv("API_DEV_PASSWORD_LOGIN", "").strip().lower()
+    return val in ("1", "true", "yes", "on")
+
+
 def _decode_jwt(token: str) -> dict[str, Any]:
-    jwks_url = os.getenv("JWT_JWKS_URL")
     audience = os.getenv("JWT_AUDIENCE")
     issuer = os.getenv("JWT_ISSUER")
-    algorithms_env = os.getenv("JWT_ALGORITHMS", "RS256 ES256")
+
+    try:
+        header = jwt.get_unverified_header(token)
+    except jwt.PyJWTError:
+        raise
+
+    alg = (header.get("alg") or "").upper()
+    secret = os.getenv("JWT_SECRET")
+    jwks_url = os.getenv("JWT_JWKS_URL")
+
+    # HS256 dev / password-login tokens verify with JWT_SECRET even when JWKS is set (e.g. Auth0).
+    if alg == "HS256" and secret:
+        return jwt.decode(
+            token,
+            secret,
+            algorithms=["HS256"],
+            audience=audience if audience else None,
+            issuer=issuer if issuer else None,
+            options={"verify_aud": bool(audience)},
+        )
 
     if jwks_url:
+        algorithms_env = os.getenv("JWT_ALGORITHMS", "RS256 ES256")
         jwks_client = PyJWKClient(jwks_url)
         signing_key = jwks_client.get_signing_key_from_jwt(token)
         return jwt.decode(
@@ -61,7 +86,6 @@ def _decode_jwt(token: str) -> dict[str, Any]:
             options={"verify_aud": bool(audience)},
         )
 
-    secret = os.getenv("JWT_SECRET")
     if not secret:
         raise RuntimeError("Set JWT_SECRET (HS256 dev) or JWT_JWKS_URL (OIDC)")
     algo = os.getenv("JWT_ALGORITHM", "HS256")
@@ -122,6 +146,17 @@ class ResearchJobStatus(BaseModel):
     recommended_ticker: str | None = None
     report_markdown: str | None = None
     error: str | None = None
+
+
+class DevLoginRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=256)
+    password: str = Field(..., min_length=1, max_length=512)
+
+
+class DevTokenOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
 
 
 async def _run_research_job_lifecycle(job: ResearchJob) -> None:
@@ -217,6 +252,47 @@ def create_app() -> FastAPI:
         if _auth_skipped_for_local_testing():
             payload["auth"] = "dev_skip_jwt"
         return payload
+
+    @app.post("/auth/dev-login", response_model=DevTokenOut)
+    def auth_dev_login(body: DevLoginRequest) -> DevTokenOut:
+        if not _dev_password_login_enabled():
+            raise HTTPException(status_code=404, detail="Not found")
+        expected_user = os.getenv("DEV_LOGIN_USER", "admin")
+        expected_pass = os.getenv("DEV_LOGIN_PASSWORD", "admin")
+        if body.username != expected_user or body.password != expected_pass:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        secret = os.getenv("JWT_SECRET")
+        if not secret:
+            raise HTTPException(
+                status_code=500,
+                detail="JWT_SECRET is required for dev-login token minting",
+            )
+
+        ttl = int(os.getenv("DEV_LOGIN_TOKEN_TTL_SECONDS", str(8 * 3600)))
+        now = datetime.now(timezone.utc)
+        exp = now + timedelta(seconds=ttl)
+        sub = os.getenv("DEV_LOGIN_SUB", "dev-admin")
+        claims: dict[str, Any] = {
+            "sub": sub,
+            "email": os.getenv("DEV_LOGIN_EMAIL", "admin@localhost"),
+            "name": os.getenv("DEV_LOGIN_NAME", "Dev Admin"),
+            "email_verified": True,
+            "provider": "dev_password",
+            "iat": int(now.timestamp()),
+            "exp": int(exp.timestamp()),
+        }
+        audience = os.getenv("JWT_AUDIENCE")
+        issuer = os.getenv("JWT_ISSUER")
+        if audience:
+            claims["aud"] = audience
+        if issuer:
+            claims["iss"] = issuer
+
+        token = jwt.encode(claims, secret, algorithm="HS256")
+        if isinstance(token, bytes):
+            token = token.decode("utf-8")
+        return DevTokenOut(access_token=token, token_type="bearer", expires_in=ttl)
 
     @app.get("/me", response_model=UserOut)
     def me(claims: dict[str, Any] = Depends(get_claims)) -> UserOut:
