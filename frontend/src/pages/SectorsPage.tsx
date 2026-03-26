@@ -4,7 +4,10 @@ import { apiJson } from "../api/client"
 import { RESEARCH_SECTORS } from "../data/sectors"
 import { getSectorTileTheme } from "../data/sectorTileThemes"
 import { useSession } from "../session/SessionContext"
-import { ResearchProgressPanel } from "../components/ResearchProgressPanel"
+import {
+  ResearchProgressPanel,
+  type ResearchModalConnection,
+} from "../components/ResearchProgressPanel"
 import type { ResearchJobAccepted } from "../api/types"
 
 type CardLayout = "featured" | "wide" | "dark" | "new" | "standard"
@@ -49,10 +52,10 @@ export function SectorsPage() {
   const [query, setQuery] = useState("")
   const [busySector, setBusySector] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [activeJob, setActiveJob] = useState<{
-    jobId: string
+  const [researchModal, setResearchModal] = useState<{
     sector: string
-    token: string
+    blurb: string
+    connection: ResearchModalConnection
   } | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
 
@@ -60,10 +63,22 @@ export function SectorsPage() {
     async (sector: string) => {
       setError(null)
       setBusySector(sector)
+      const blurb =
+        SECTOR_BLURBS[sector] ??
+        "Launch a focused crew research run for this theme."
+      setResearchModal({
+        sector,
+        blurb,
+        connection: { state: "starting" },
+      })
       try {
         const token = await getAccessToken()
         if (!token) {
-          setError("Not signed in")
+          setResearchModal({
+            sector,
+            blurb,
+            connection: { state: "error", message: "Not signed in" },
+          })
           return
         }
         const accepted = await apiJson<ResearchJobAccepted>("/research", {
@@ -72,9 +87,25 @@ export function SectorsPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ sector }),
         })
-        setActiveJob({ jobId: accepted.job_id, sector, token })
+        setResearchModal({
+          sector,
+          blurb,
+          connection: {
+            state: "live",
+            jobId: accepted.job_id,
+            accessToken: token,
+          },
+        })
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to start research")
+        setResearchModal({
+          sector,
+          blurb,
+          connection: {
+            state: "error",
+            message:
+              e instanceof Error ? e.message : "Failed to start research",
+          },
+        })
       } finally {
         setBusySector(null)
       }
@@ -151,7 +182,7 @@ export function SectorsPage() {
                   disabled={anyBusy}
                   onClick={() => void startResearch(sector)}
                   className={[
-                    "group relative flex flex-col gap-5 overflow-hidden rounded-2xl border border-outline-ghost bg-surface-container-lowest p-6 text-left shadow-md shadow-[0_20px_40px_rgba(25,28,30,0.06)] transition hover:-translate-y-0.5 hover:shadow-lg md:min-h-[280px] md:p-8",
+                    "group relative flex cursor-pointer flex-col gap-5 overflow-hidden rounded-2xl border border-outline-ghost bg-surface-container-lowest p-6 text-left shadow-md shadow-[0_20px_40px_rgba(25,28,30,0.06)] transition hover:-translate-y-0.5 hover:shadow-lg md:min-h-[280px] md:p-8",
                     span,
                     anyBusy ? baseDisabled : "hover:border-primary-container/30",
                   ].join(" ")}
@@ -207,7 +238,7 @@ export function SectorsPage() {
                   disabled={anyBusy}
                   onClick={() => void startResearch(sector)}
                   className={[
-                    "group flex flex-col gap-5 rounded-2xl border border-outline-ghost bg-surface-container-lowest p-6 text-left shadow-md transition hover:-translate-y-0.5 hover:border-primary-container/30 hover:shadow-lg sm:flex-row sm:items-center sm:gap-8",
+                    "group flex cursor-pointer flex-col gap-5 rounded-2xl border border-outline-ghost bg-surface-container-lowest p-6 text-left shadow-md transition hover:-translate-y-0.5 hover:border-primary-container/30 hover:shadow-lg sm:flex-row sm:items-center sm:gap-8",
                     span,
                     anyBusy ? baseDisabled : "",
                   ].join(" ")}
@@ -241,7 +272,7 @@ export function SectorsPage() {
                   disabled={anyBusy}
                   onClick={() => void startResearch(sector)}
                   className={[
-                    "group relative flex flex-col overflow-hidden rounded-2xl bg-emerald-950 p-6 text-left text-emerald-50 shadow-xl ring-1 ring-emerald-900/50 transition hover:-translate-y-0.5 hover:ring-primary-container/40",
+                    "group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl bg-emerald-950 p-6 text-left text-emerald-50 shadow-xl ring-1 ring-emerald-900/50 transition hover:-translate-y-0.5 hover:ring-primary-container/40",
                     anyBusy ? baseDisabled : "",
                   ].join(" ")}
                 >
@@ -273,7 +304,7 @@ export function SectorsPage() {
                 disabled={anyBusy}
                 onClick={() => void startResearch(sector)}
                 className={[
-                  "group relative flex flex-col gap-4 overflow-hidden rounded-2xl border border-outline-ghost bg-surface-container-lowest p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary-container/25 hover:shadow-md",
+                  "group relative flex cursor-pointer flex-col gap-4 overflow-hidden rounded-2xl border border-outline-ghost bg-surface-container-lowest p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary-container/25 hover:shadow-md",
                   anyBusy ? baseDisabled : "",
                 ].join(" ")}
               >
@@ -339,12 +370,12 @@ export function SectorsPage() {
         </div>
       </section>
 
-      {activeJob ? (
+      {researchModal ? (
         <ResearchProgressPanel
-          jobId={activeJob.jobId}
-          accessToken={activeJob.token}
-          sector={activeJob.sector}
-          onClose={() => setActiveJob(null)}
+          sector={researchModal.sector}
+          blurb={researchModal.blurb}
+          connection={researchModal.connection}
+          onClose={() => setResearchModal(null)}
         />
       ) : null}
     </div>

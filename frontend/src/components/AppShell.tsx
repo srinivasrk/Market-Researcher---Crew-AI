@@ -61,15 +61,29 @@ export function AppShell() {
         <aside className="flex w-56 shrink-0 flex-col border-r border-outline-ghost bg-surface-container-lowest shadow-[2px_0_12px_rgb(25_28_30_/0.04)]">
           <div className="border-b border-outline-ghost px-4 py-4">
             <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded bg-primary-container text-xs font-bold text-surface-container-lowest shadow-sm ring-2 ring-outline-ghost">
-                MR
-              </div>
+              {me?.picture_url ? (
+                <img
+                  src={me.picture_url}
+                  alt=""
+                  className="h-11 w-11 shrink-0 rounded object-cover shadow-sm ring-2 ring-outline-ghost"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded bg-primary-container text-xs font-bold text-surface-container-lowest shadow-sm ring-2 ring-outline-ghost">
+                  {(me?.name ?? me?.email ?? "?")
+                    .trim()
+                    .charAt(0)
+                    .toUpperCase() || "?"}
+                </div>
+              )}
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-semibold text-on-surface">
-                  {me?.name ?? me?.email ?? "Signed in"}
+                  {me?.name ?? me?.username ?? me?.email ?? "Signed in"}
                 </p>
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-primary-container">
-                  {APP_BRAND_NAME}
+                <p className="truncate text-xs text-on-surface/65">
+                  {me?.username
+                    ? `@${me.username}`
+                    : (me?.email ?? "\u00a0")}
                 </p>
               </div>
             </div>

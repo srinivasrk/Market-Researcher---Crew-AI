@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react"
 import { Link, useParams } from "react-router-dom"
 import { apiJson } from "../api/client"
+import {
+  ResearchProcessAside,
+  ResearchReportArticle,
+  ResearchRunPageHeader,
+} from "../components/ResearchRunViews"
 import { useSession } from "../session/SessionContext"
 import type { ResearchRunDetail } from "../api/types"
 
@@ -32,7 +37,7 @@ export function HistoryDetailPage() {
   }, [runId, getAccessToken])
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-12">
       <Link
         to="/app/history"
         className="inline-flex items-center gap-1.5 rounded border border-outline-ghost bg-surface-container-lowest px-3 py-1.5 text-sm font-semibold text-primary-container shadow-sm transition hover:bg-primary-container/10 hover:text-on-surface"
@@ -53,16 +58,14 @@ export function HistoryDetailPage() {
       ) : null}
 
       {data ? (
-        <div className="overflow-hidden rounded border border-outline-ghost bg-surface-container-lowest shadow-[0_4px_20px_rgba(25,28,30,0.05)]">
-          <div className="border-b border-outline-ghost bg-primary-container px-4 py-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-surface-container-lowest">
-              Raw JSON
-            </p>
-          </div>
-          <pre className="max-h-[min(70vh,52rem)] overflow-auto bg-surface p-4 font-mono text-xs leading-relaxed text-on-surface">
-            {JSON.stringify(data, null, 2)}
-          </pre>
-        </div>
+        <>
+          <ResearchRunPageHeader data={data} />
+          <ResearchProcessAside />
+          <ResearchReportArticle
+            reportMarkdown={data.report_markdown}
+            recommendedTicker={data.recommended_ticker}
+          />
+        </>
       ) : null}
     </div>
   )

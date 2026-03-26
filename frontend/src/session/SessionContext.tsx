@@ -11,6 +11,7 @@ import { useAuth0 } from "@auth0/auth0-react"
 import {
   AUTH0_AUDIENCE,
   AUTH0_CONFIGURED,
+  AUTH0_GOOGLE_CONNECTION,
   SHOW_DEV_PASSWORD_LOGIN,
 } from "../lib/config"
 import { setUnauthorizedHandler } from "../api/client"
@@ -21,6 +22,7 @@ type SessionContextValue = {
   isAuthenticated: boolean
   isLoading: boolean
   loginWithAuth0: () => void
+  loginWithGoogle: () => void
   loginWithDevToken: (token: string) => void
   logout: () => Promise<void>
   devToken: string | null
@@ -52,24 +54,41 @@ function SessionInnerWithAuth0({ children }: { children: ReactNode }) {
   const getAccessToken = useCallback(async () => {
     if (devToken) return devToken
     if (!isAuthenticated) return null
-    try {
-      return await getAccessTokenSilently({
-        authorizationParams: AUTH0_AUDIENCE
-          ? { audience: AUTH0_AUDIENCE }
-          : undefined,
-      })
-    } catch {
-      return null
+    const authorizationParams = AUTH0_AUDIENCE
+      ? { audience: AUTH0_AUDIENCE }
+      : undefined
+    let lastError: unknown
+    for (let attempt = 0; attempt < 6; attempt++) {
+      try {
+        return await getAccessTokenSilently({ authorizationParams })
+      } catch (e) {
+        lastError = e
+        await new Promise((r) => setTimeout(r, 80 * (attempt + 1)))
+      }
     }
+    console.warn("getAccessTokenSilently failed after retries", lastError)
+    return null
   }, [devToken, isAuthenticated, getAccessTokenSilently])
+
+  const sharedAuthParams = useMemo(
+    () => (AUTH0_AUDIENCE ? { audience: AUTH0_AUDIENCE } : undefined),
+    [AUTH0_AUDIENCE],
+  )
 
   const loginWithAuth0 = useCallback(() => {
     loginWithRedirect({
-      authorizationParams: AUTH0_AUDIENCE
-        ? { audience: AUTH0_AUDIENCE }
-        : undefined,
+      authorizationParams: sharedAuthParams,
     })
-  }, [loginWithRedirect])
+  }, [loginWithRedirect, sharedAuthParams])
+
+  const loginWithGoogle = useCallback(() => {
+    loginWithRedirect({
+      authorizationParams: {
+        ...sharedAuthParams,
+        connection: AUTH0_GOOGLE_CONNECTION,
+      },
+    })
+  }, [loginWithRedirect, sharedAuthParams, AUTH0_GOOGLE_CONNECTION])
 
   const loginWithDevToken = useCallback((token: string) => {
     localStorage.setItem(DEV_JWT_STORAGE_KEY, token)
@@ -95,6 +114,7 @@ function SessionInnerWithAuth0({ children }: { children: ReactNode }) {
       isAuthenticated: isAuthed,
       isLoading: effectiveLoading,
       loginWithAuth0,
+      loginWithGoogle,
       loginWithDevToken,
       logout,
       devToken,
@@ -106,6 +126,7 @@ function SessionInnerWithAuth0({ children }: { children: ReactNode }) {
       isAuthed,
       effectiveLoading,
       loginWithAuth0,
+      loginWithGoogle,
       loginWithDevToken,
       logout,
       devToken,
@@ -126,6 +147,10 @@ function SessionInnerDevOnly({ children }: { children: ReactNode }) {
     /* no-op when Auth0 not configured */
   }, [])
 
+  const loginWithGoogle = useCallback(() => {
+    /* no-op when Auth0 not configured */
+  }, [])
+
   const loginWithDevToken = useCallback((token: string) => {
     localStorage.setItem(DEV_JWT_STORAGE_KEY, token)
     setDevToken(token)
@@ -142,6 +167,7 @@ function SessionInnerDevOnly({ children }: { children: ReactNode }) {
       isAuthenticated: Boolean(devToken),
       isLoading: false,
       loginWithAuth0,
+      loginWithGoogle,
       loginWithDevToken,
       logout,
       devToken,
@@ -152,6 +178,7 @@ function SessionInnerDevOnly({ children }: { children: ReactNode }) {
       getAccessToken,
       devToken,
       loginWithAuth0,
+      loginWithGoogle,
       loginWithDevToken,
       logout,
     ],

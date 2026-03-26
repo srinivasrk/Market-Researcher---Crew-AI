@@ -76,9 +76,16 @@ export function HistoryPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3 align-middle">
-                    <span className="inline-block rounded border border-primary-container/35 bg-primary-container/10 px-2 py-1 font-mono text-xs font-semibold text-on-surface">
-                      {r.recommended_ticker || "—"}
-                    </span>
+                    <div className="flex min-w-0 max-w-xs flex-col gap-0.5">
+                      <span className="inline-block w-fit rounded border border-primary-container/35 bg-primary-container/10 px-2 py-1 font-mono text-xs font-semibold text-on-surface">
+                        {r.recommended_ticker || "—"}
+                      </span>
+                      {r.company_name ? (
+                        <span className="text-xs leading-snug text-on-surface/65">
+                          {r.company_name}
+                        </span>
+                      ) : null}
+                    </div>
                   </td>
                   <td className="px-4 py-3 tabular-nums text-on-surface/70">
                     {new Date(r.created_at).toLocaleString()}
@@ -88,7 +95,7 @@ export function HistoryPage() {
                       to={`/app/history/${r.id}`}
                       className="inline-flex rounded border border-primary-container/40 bg-primary-container/12 px-3 py-1.5 text-xs font-semibold text-on-surface transition hover:bg-primary-container/20"
                     >
-                      View JSON
+                      Open report
                     </Link>
                   </td>
                 </tr>

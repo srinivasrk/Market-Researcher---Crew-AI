@@ -3,6 +3,7 @@ export type UserOut = {
   email: string | null
   email_verified: boolean | null
   name: string | null
+  username: string | null
   given_name: string | null
   family_name: string | null
   picture_url: string | null
@@ -30,12 +31,24 @@ export type ResearchHistoryRow = {
   id: string
   sector: string
   recommended_ticker: string
+  company_name: string | null
   created_at: string
   expires_at: string
   session_id: string | null
 }
 
-export type ResearchRunDetail = Record<string, unknown>
+export type ResearchRunDetail = {
+  id: string
+  user_id: string
+  session_id: string | null
+  sector: string
+  sector_normalized: string
+  recommended_ticker: string
+  company_name: string | null
+  report_markdown: string | null
+  created_at: string
+  expires_at: string
+}
 
 export type DevLoginResponse = {
   access_token: string

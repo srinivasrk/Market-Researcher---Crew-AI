@@ -34,6 +34,12 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+def _ensure_users_username_column(conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "username" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN username TEXT")
+
+
 def init_db(conn: sqlite3.Connection | None = None) -> None:
     own = conn is None
     if conn is None:
@@ -57,6 +63,7 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
             );
             """
         )
+        _ensure_users_username_column(conn)
         legacy = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='research_runs'"
         ).fetchone()
@@ -64,7 +71,7 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
             cols = {
                 r[1] for r in conn.execute("PRAGMA table_info(research_runs)").fetchall()
             }
-            if "sector_normalized" not in cols:
+            if "sector_normalized" not in cols or "company_name" not in cols:
                 conn.execute("DROP TABLE research_runs")
         conn.executescript(
             """
@@ -75,6 +82,7 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
                 sector TEXT NOT NULL,
                 sector_normalized TEXT NOT NULL,
                 recommended_ticker TEXT NOT NULL,
+                company_name TEXT,
                 report_markdown TEXT,
                 created_at TEXT NOT NULL,
                 expires_at TEXT NOT NULL
@@ -111,6 +119,7 @@ class UserRecord:
     email: str | None
     email_verified: bool | None
     name: str | None
+    username: str | None
     given_name: str | None
     family_name: str | None
     picture_url: str | None
@@ -118,6 +127,79 @@ class UserRecord:
     provider_subject: str | None
     created_at: str
     updated_at: str
+
+
+def _str_claim(value: Any) -> str | None:
+    if value is None:
+        return None
+    s = str(value).strip()
+    return s or None
+
+
+def _claim_flat_or_namespaced(
+    claims: dict[str, Any],
+    *flat_keys: str,
+) -> str | None:
+    for k in flat_keys:
+        s = _str_claim(claims.get(k))
+        if s is not None:
+            return s
+    if not flat_keys:
+        return None
+    tails = {k.lower() for k in flat_keys}
+    for k, v in claims.items():
+        if not isinstance(k, str) or "/" not in k:
+            continue
+        if k.rsplit("/", 1)[-1].lower() in tails:
+            s = _str_claim(v)
+            if s is not None:
+                return s
+    return None
+
+
+def _normalize_profile_from_claims(claims: dict[str, Any]) -> dict[str, Any]:
+    """Map JWT / OIDC / Auth0-style claims onto user columns."""
+    email = _claim_flat_or_namespaced(claims, "email")
+    given = _claim_flat_or_namespaced(claims, "given_name")
+    family = _claim_flat_or_namespaced(claims, "family_name")
+    name = _claim_flat_or_namespaced(claims, "name")
+    username = _claim_flat_or_namespaced(
+        claims, "preferred_username", "nickname", "username"
+    )
+    picture = _claim_flat_or_namespaced(
+        claims, "picture", "picture_url", "avatar", "photo_url"
+    )
+
+    composed = " ".join(x for x in (given, family) if x).strip() or None
+    if not name and composed:
+        name = composed
+    if not name and username:
+        name = username
+    if not name and email and "@" in email:
+        name = email.split("@", 1)[0]
+
+    ev_raw = claims.get("email_verified")
+    email_verified: int | None = None
+    if ev_raw is True:
+        email_verified = 1
+    elif ev_raw is False:
+        email_verified = 0
+
+    provider = _str_claim(claims.get("provider"))
+    iss = claims.get("iss")
+    if iss is not None and not provider:
+        provider = str(iss)
+
+    return {
+        "email": email,
+        "email_verified": email_verified,
+        "name": name,
+        "username": username,
+        "given_name": given,
+        "family_name": family,
+        "picture_url": picture,
+        "provider": provider,
+    }
 
 
 def upsert_user_from_claims(claims: dict[str, Any], conn: sqlite3.Connection | None = None) -> UserRecord:
@@ -132,34 +214,7 @@ def upsert_user_from_claims(claims: dict[str, Any], conn: sqlite3.Connection | N
             raise ValueError("JWT must include sub or user_id")
 
         now = _iso(utc_now())
-        email = claims.get("email")
-        if email is not None:
-            email = str(email)
-        ev = claims.get("email_verified")
-        email_verified: int | None = None
-        if ev is True:
-            email_verified = 1
-        elif ev is False:
-            email_verified = 0
-
-        name = claims.get("name")
-        if name is not None:
-            name = str(name)
-        given = claims.get("given_name")
-        if given is not None:
-            given = str(given)
-        family = claims.get("family_name")
-        if family is not None:
-            family = str(family)
-        picture = claims.get("picture")
-        if picture is not None:
-            picture = str(picture)
-        provider = claims.get("provider")
-        if provider is not None:
-            provider = str(provider)
-        iss = claims.get("iss")
-        if iss is not None and not provider:
-            provider = str(iss)
+        prof = _normalize_profile_from_claims(claims)
         sub_raw = claims.get("sub")
         provider_subject = str(sub_raw) if sub_raw is not None else None
 
@@ -168,14 +223,15 @@ def upsert_user_from_claims(claims: dict[str, Any], conn: sqlite3.Connection | N
         conn.execute(
             """
             INSERT INTO users (
-                id, email, email_verified, name, given_name, family_name,
+                id, email, email_verified, name, username, given_name, family_name,
                 picture_url, provider, provider_subject, raw_claims_json,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 email = excluded.email,
                 email_verified = excluded.email_verified,
                 name = excluded.name,
+                username = excluded.username,
                 given_name = excluded.given_name,
                 family_name = excluded.family_name,
                 picture_url = excluded.picture_url,
@@ -186,13 +242,14 @@ def upsert_user_from_claims(claims: dict[str, Any], conn: sqlite3.Connection | N
             """,
             (
                 user_id,
-                email,
-                email_verified,
-                name,
-                given,
-                family,
-                picture,
-                provider,
+                prof["email"],
+                prof["email_verified"],
+                prof["name"],
+                prof["username"],
+                prof["given_name"],
+                prof["family_name"],
+                prof["picture_url"],
+                prof["provider"],
                 provider_subject,
                 raw_json,
                 now,
@@ -220,6 +277,7 @@ def _row_to_user(row: sqlite3.Row) -> UserRecord:
         email=row["email"],
         email_verified=email_verified,
         name=row["name"],
+        username=row["username"],
         given_name=row["given_name"],
         family_name=row["family_name"],
         picture_url=row["picture_url"],
@@ -281,6 +339,7 @@ def save_run(
     recommended_ticker: str,
     report_markdown: str | None,
     session_id: str | None = None,
+    company_name: str | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> str:
     own = conn is None
@@ -290,12 +349,13 @@ def save_run(
         run_id = str(uuid.uuid4())
         created = utc_now()
         expires = created + RESEARCH_TTL
+        cn = company_name.strip() if company_name else None
         conn.execute(
             """
             INSERT INTO research_runs (
                 id, user_id, session_id, sector, sector_normalized,
-                recommended_ticker, report_markdown, created_at, expires_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                recommended_ticker, company_name, report_markdown, created_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -304,6 +364,7 @@ def save_run(
                 sector,
                 sector_normalized,
                 recommended_ticker.upper().strip(),
+                cn,
                 report_markdown,
                 _iso(created),
                 _iso(expires),
@@ -327,7 +388,7 @@ def list_runs_for_user(
     try:
         rows = conn.execute(
             """
-            SELECT id, sector, recommended_ticker, created_at, expires_at, session_id
+            SELECT id, sector, recommended_ticker, company_name, created_at, expires_at, session_id
             FROM research_runs
             WHERE user_id = ?
             ORDER BY created_at DESC

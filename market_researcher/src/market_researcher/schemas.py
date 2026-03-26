@@ -5,6 +5,22 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+class ComparedTicker(BaseModel):
+    """Another name evaluated against the primary pick."""
+
+    ticker: str = Field(
+        ...,
+        description="US ticker symbol only, uppercase, no exchange prefix.",
+    )
+    why_primary_wins: str = Field(
+        ...,
+        description=(
+            "One or two sentences: why the primary recommendation was preferred over "
+            "this name, or what trade-off narrowed the choice."
+        ),
+    )
+
+
 class InvestmentRecommendation(BaseModel):
     """Final investment pick returned as structured output (no markdown parsing)."""
 
@@ -45,6 +61,15 @@ class InvestmentRecommendation(BaseModel):
         None,
         description="If recent-pick exclusions forced choosing a next-best name, explain briefly; otherwise null.",
     )
+    compared_tickers: list[ComparedTicker] = Field(
+        ...,
+        min_length=1,
+        max_length=8,
+        description=(
+            "Other US liquid names seriously weighed for this sector (not the primary pick). "
+            "Each entry explains how the primary compares or why this name was set aside."
+        ),
+    )
 
     def to_markdown(self) -> str:
         """Human-readable report for storage and API consumers that expect markdown."""
@@ -62,6 +87,12 @@ class InvestmentRecommendation(BaseModel):
             "",
             "### Runner-up",
             f"- **{self.runner_up_ticker.upper().strip()}**: {self.runner_up_rationale}",
+            "",
+            "### Other stocks considered",
+            *[
+                f"- **{c.ticker.upper().strip()}**: {c.why_primary_wins}"
+                for c in self.compared_tickers
+            ],
         ]
         if self.exclusion_constraint_note:
             lines.extend(["", "### Note on exclusions", self.exclusion_constraint_note])

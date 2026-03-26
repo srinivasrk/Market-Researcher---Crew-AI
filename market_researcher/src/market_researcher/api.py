@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -49,9 +52,48 @@ def _dev_password_login_enabled() -> bool:
     return val in ("1", "true", "yes", "on")
 
 
+_JWT_LEEWAY = int(os.getenv("JWT_LEEWAY_SECONDS", "60"))
+
+
+class NonJwtBearerTokenError(Exception):
+    """Auth0 returns opaque access tokens when no API audience is requested (SPA-only)."""
+
+    pass
+
+
+def _bearer_looks_like_jwt(token: str) -> bool:
+    parts = token.strip().split(".")
+    return len(parts) == 3 and all(parts)
+
+
+def _issuer_arg_and_verify(
+    token: str, issuer_env: str | None
+) -> tuple[str | None, bool]:
+    """Match JWT_ISSUER to token `iss` with or without trailing slash; PyJWT needs exact iss from token."""
+    unverified = jwt.decode(token, options={"verify_signature": False})
+    token_iss = unverified.get("iss")
+    token_s = str(token_iss).strip() if token_iss else None
+    env = issuer_env.strip() if issuer_env else None
+    if env:
+        if not token_s or token_s.rstrip("/") != env.rstrip("/"):
+            raise jwt.InvalidIssuerError(
+                f"Token iss {token_s!r} does not match JWT_ISSUER {env!r}"
+            )
+        return token_s, True
+    return None, False
+
+
 def _decode_jwt(token: str) -> dict[str, Any]:
     audience = os.getenv("JWT_AUDIENCE")
     issuer = os.getenv("JWT_ISSUER")
+
+    if not _bearer_looks_like_jwt(token):
+        # Auth0 SPAs without an API "audience" get opaque tokens — JWKS cannot verify them.
+        raise NonJwtBearerTokenError(
+            "Access token is not a JWT. Create an API in Auth0 (Dashboard → Applications → APIs), "
+            "copy its Identifier, set the same value as VITE_AUTH0_AUDIENCE in the frontend .env and "
+            "JWT_AUDIENCE in the API .env, restart both apps, and sign in again."
+        )
 
     try:
         header = jwt.get_unverified_header(token)
@@ -62,15 +104,20 @@ def _decode_jwt(token: str) -> dict[str, Any]:
     secret = os.getenv("JWT_SECRET")
     jwks_url = os.getenv("JWT_JWKS_URL")
 
+    iss_arg, verify_iss = _issuer_arg_and_verify(token, issuer)
+    aud = audience if audience else None
+    aud_opts: dict[str, Any] = {"verify_aud": bool(audience), "verify_iss": verify_iss}
+
     # HS256 dev / password-login tokens verify with JWT_SECRET even when JWKS is set (e.g. Auth0).
     if alg == "HS256" and secret:
         return jwt.decode(
             token,
             secret,
             algorithms=["HS256"],
-            audience=audience if audience else None,
-            issuer=issuer if issuer else None,
-            options={"verify_aud": bool(audience)},
+            audience=aud,
+            issuer=iss_arg,
+            options=aud_opts,
+            leeway=_JWT_LEEWAY,
         )
 
     if jwks_url:
@@ -81,9 +128,10 @@ def _decode_jwt(token: str) -> dict[str, Any]:
             token,
             signing_key.key,
             algorithms=algorithms_env.split(),
-            audience=audience if audience else None,
-            issuer=issuer if issuer else None,
-            options={"verify_aud": bool(audience)},
+            audience=aud,
+            issuer=iss_arg,
+            options=aud_opts,
+            leeway=_JWT_LEEWAY,
         )
 
     if not secret:
@@ -93,10 +141,87 @@ def _decode_jwt(token: str) -> dict[str, Any]:
         token,
         secret,
         algorithms=[algo],
-        audience=audience if audience else None,
-        issuer=issuer if issuer else None,
-        options={"verify_aud": bool(audience)},
+        audience=aud,
+        issuer=iss_arg,
+        options=aud_opts,
+        leeway=_JWT_LEEWAY,
     )
+
+
+_USERINFO_PROFILE_KEYS = frozenset(
+    {
+        "email",
+        "email_verified",
+        "name",
+        "given_name",
+        "family_name",
+        "picture",
+        "nickname",
+        "preferred_username",
+        "locale",
+    }
+)
+
+
+def _enrich_claims_from_auth0_userinfo(
+    claims: dict[str, Any],
+    raw_access_token: str,
+) -> dict[str, Any]:
+    """Fill missing profile fields from Auth0 OIDC /userinfo when the access JWT has no email/name."""
+    val = os.getenv("AUTH0_USERINFO_ENRICH", "true").strip().lower()
+    if val in ("0", "false", "no", "off"):
+        return claims
+
+    email = claims.get("email")
+    name = claims.get("name")
+    if email and str(email).strip() and name and str(name).strip():
+        return claims
+
+    iss = claims.get("iss")
+    if not iss or "auth0.com" not in str(iss).lower():
+        return claims
+
+    aud = claims.get("aud")
+    aud_list: list[str]
+    if isinstance(aud, str):
+        aud_list = [aud]
+    elif isinstance(aud, list):
+        aud_list = [str(a) for a in aud]
+    else:
+        aud_list = []
+    scope = str(claims.get("scope") or "")
+    has_userinfo_aud = any(
+        a.rstrip("/").lower().endswith("userinfo") for a in aud_list
+    )
+    if aud_list and not has_userinfo_aud and "openid" not in scope:
+        return claims
+
+    base = str(iss).rstrip("/")
+    url = f"{base}/userinfo"
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {raw_access_token}",
+                "Accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            ui = json.loads(resp.read().decode())
+    except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError, TimeoutError, OSError):
+        return claims
+
+    if not isinstance(ui, dict):
+        return claims
+
+    merged: dict[str, Any] = dict(claims)
+    for key in _USERINFO_PROFILE_KEYS:
+        if key not in ui or ui[key] is None:
+            continue
+        cur = merged.get(key)
+        if cur is None or (isinstance(cur, str) and not cur.strip()):
+            merged[key] = ui[key]
+    return merged
 
 
 async def get_claims(
@@ -108,9 +233,18 @@ async def get_claims(
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
     try:
-        return _decode_jwt(credentials.credentials)
+        raw = credentials.credentials
+        claims = _decode_jwt(raw)
+        return await run_in_threadpool(
+            _enrich_claims_from_auth0_userinfo, claims, raw
+        )
+    except NonJwtBearerTokenError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
     except jwt.PyJWTError as exc:
-        raise HTTPException(status_code=401, detail="Invalid token") from exc
+        detail = "Invalid token"
+        if os.getenv("JWT_DEBUG_ERRORS", "").strip().lower() in ("1", "true", "yes"):
+            detail = f"Invalid token: {type(exc).__name__}: {exc}"
+        raise HTTPException(status_code=401, detail=detail) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -120,6 +254,7 @@ class UserOut(BaseModel):
     email: str | None = None
     email_verified: bool | None = None
     name: str | None = None
+    username: str | None = None
     given_name: str | None = None
     family_name: str | None = None
     picture_url: str | None = None
@@ -217,7 +352,11 @@ async def _ws_resolve_claims(websocket: WebSocket) -> dict[str, Any] | None:
         await websocket.close(code=4401, reason="Missing token query param (use ?token=JWT)")
         return None
     try:
-        return _decode_jwt(token)
+        claims = _decode_jwt(token)
+        return _enrich_claims_from_auth0_userinfo(claims, token)
+    except NonJwtBearerTokenError:
+        await websocket.close(code=4401, reason="Opaque token: set Auth0 API audience")
+        return None
     except jwt.PyJWTError:
         await websocket.close(code=4401, reason="Invalid token")
         return None
@@ -273,6 +412,7 @@ def create_app() -> FastAPI:
         now = datetime.now(timezone.utc)
         exp = now + timedelta(seconds=ttl)
         sub = os.getenv("DEV_LOGIN_SUB", "dev-admin")
+        dev_username = os.getenv("DEV_LOGIN_USERNAME", "").strip()
         claims: dict[str, Any] = {
             "sub": sub,
             "email": os.getenv("DEV_LOGIN_EMAIL", "admin@localhost"),
@@ -282,6 +422,8 @@ def create_app() -> FastAPI:
             "iat": int(now.timestamp()),
             "exp": int(exp.timestamp()),
         }
+        if dev_username:
+            claims["preferred_username"] = dev_username
         audience = os.getenv("JWT_AUDIENCE")
         issuer = os.getenv("JWT_ISSUER")
         if audience:
@@ -302,6 +444,7 @@ def create_app() -> FastAPI:
             email=user.email,
             email_verified=user.email_verified,
             name=user.name,
+            username=user.username,
             given_name=user.given_name,
             family_name=user.family_name,
             picture_url=user.picture_url,
@@ -334,6 +477,7 @@ def create_app() -> FastAPI:
         user_id = str(claims.get("sub") or claims.get("user_id") or "")
         if not user_id:
             raise HTTPException(status_code=401, detail="Token missing sub")
+        upsert_user_from_claims(claims)
         job = get_research_job(job_id)
         if job is None or job.user_id != user_id:
             raise HTTPException(status_code=404, detail="Job not found")
@@ -357,6 +501,7 @@ def create_app() -> FastAPI:
         if not user_id:
             await websocket.close(code=4401, reason="Token missing sub")
             return
+        upsert_user_from_claims(claims)
         job = get_research_job(job_id)
         if job is None or job.user_id != user_id:
             await websocket.close(code=4403, reason="Job not found or forbidden")
@@ -407,6 +552,7 @@ def create_app() -> FastAPI:
         sub = str(claims.get("sub") or claims.get("user_id") or "")
         if not sub:
             raise HTTPException(status_code=401, detail="Token missing sub")
+        upsert_user_from_claims(claims)
         return list_runs_for_user(sub, limit=min(limit, 100))
 
     @app.get("/research/{run_id}")
@@ -417,6 +563,7 @@ def create_app() -> FastAPI:
         sub = str(claims.get("sub") or claims.get("user_id") or "")
         if not sub:
             raise HTTPException(status_code=401, detail="Token missing sub")
+        upsert_user_from_claims(claims)
         row = get_run(run_id, sub)
         if not row:
             raise HTTPException(status_code=404, detail="Run not found")

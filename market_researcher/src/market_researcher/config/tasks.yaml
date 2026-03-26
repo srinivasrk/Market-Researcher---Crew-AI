@@ -41,7 +41,12 @@ investment_recommendation_task:
     A structured object (Pydantic/JSON) with these exact fields: primary_ticker (symbol
     only), company_name, thesis_bullets (3-5 strings), risks (exactly 3 strings),
     invalidation_triggers (string), disclaimer (string), runner_up_ticker,
-    runner_up_rationale (one sentence), exclusion_constraint_note (string or null if N/A).
-    Populate every required field; use null only for exclusion_constraint_note when no
-    exclusion forced a compromise.
+    runner_up_rationale (one sentence), exclusion_constraint_note (string or null if N/A),
+    compared_tickers (array of 2-8 objects, each with ticker and why_primary_wins strings).
+    compared_tickers must list OTHER names you seriously evaluated (not the primary);
+    each why_primary_wins explains why the primary was preferred or what trade-off mattered.
+    Do not duplicate the primary ticker; runner-up may also appear in compared_tickers
+    if you expand on the same name with more detail than runner_up_rationale, or omit it
+    there to avoid redundancy. Populate every required field; use null only for
+    exclusion_constraint_note when no exclusion forced a compromise.
   agent: investment_strategist

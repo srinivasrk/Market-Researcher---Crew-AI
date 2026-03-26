@@ -27,7 +27,7 @@ export async function apiFetch(
   }
   const url = path.startsWith("http") ? path : `${API_BASE_URL}${path}`
   const res = await fetch(url, { ...rest, headers })
-  if (res.status === 401) {
+  if (res.status === 401 && accessToken) {
     onUnauthorized?.()
   }
   return res

@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom"
+import { Navigate, Route, Routes } from "react-router-dom"
 import { AppShell } from "./components/AppShell"
 import { DashboardPage } from "./pages/DashboardPage"
 import { HistoryDetailPage } from "./pages/HistoryDetailPage"
@@ -11,7 +11,7 @@ import { UnauthorizedBridge } from "./routes/UnauthorizedBridge"
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <>
       <UnauthorizedBridge />
       <Routes>
         <Route path="/" element={<IndexRedirect />} />
@@ -32,6 +32,6 @@ export default function App() {
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-    </BrowserRouter>
+    </>
   )
 }

@@ -161,9 +161,11 @@ def run_research_for_user(
                 if isinstance(p, InvestmentRecommendation):
                     rec = p
                     break
+        company_name: str | None = None
         if rec:
             ticker = rec.primary_ticker.strip().upper()
             report_markdown = rec.to_markdown()
+            company_name = rec.company_name.strip() or None
         else:
             raw = getattr(output, "raw", None) or str(output)
             report_markdown = raw if isinstance(raw, str) else str(raw)
@@ -178,6 +180,7 @@ def run_research_for_user(
             recommended_ticker=ticker,
             report_markdown=report_markdown,
             session_id=session_id,
+            company_name=company_name,
         )
         notify({"type": "run_persisted", "run_id": run_id})
         return ResearchResult(
