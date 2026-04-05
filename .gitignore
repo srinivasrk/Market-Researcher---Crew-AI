@@ -1,0 +1,14 @@
+# Internal / AI assistant config — keep off GitHub
+CLAUDE.md
+
+# Stray root-level lockfile (packages live in market_researcher/ and frontend/)
+package-lock.json
+
+# Internal planning & ops docs (tracked locally, not published)
+docs/FEATURE*
+docs/PENTEST*
+docs/PLAN*
+docs/HOSTING*
+
+# Temporary files
+docs/README.original.md
