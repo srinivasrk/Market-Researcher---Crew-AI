@@ -92,12 +92,12 @@ Stock Analyst is free to try. Pro unlocks unlimited daily research and advanced 
     <td><img src="docs/screenshots/research_progress.png" alt="Research progress" width="420"/></td>
   </tr>
   <tr>
-    <td align="center"><b>History & track record</b></td>
-    <td align="center"><b>Dashboard (detailed view)</b></td>
+    <td align="center"><b>History</b></td>
+    <td align="center"><b>Track record</b></td>
   </tr>
   <tr>
     <td><img src="docs/screenshots/histroy_page.png" alt="History" width="420"/></td>
-    <td><img src="docs/screenshots/dashboard_2.png" alt="Dashboard detail" width="420"/></td>
+    <td><img src="docs/screenshots/track_record.png" alt="Track record" width="420"/></td>
   </tr>
 </table>
 

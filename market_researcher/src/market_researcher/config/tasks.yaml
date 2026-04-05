@@ -29,24 +29,34 @@ financial_signals_task:
 
 investment_recommendation_task:
   description: >
-    Based strictly on the prior tasks' outputs, select ONE primary stock you would recommend
-    for investment exposure to "{sector}". You MUST NOT choose any ticker listed
-    as excluded (same list as earlier in the crew): {excluded_tickers}. If that is "none",
-    there are no exclusions. If every strong candidate is excluded, pick the next-best
-    eligible name and briefly state the constraint. Name ticker and company, explain thesis
-    in 3–5 bullets, list top 3 risks, suggest what would invalidate the thesis, and add a
-    short paragraph that this is educational research—not personalized financial, legal,
-    or tax advice.
+    Based strictly on the prior tasks' outputs, rank the THREE best eligible stocks for
+    investment exposure to "{sector}" and declare a winner. You MUST NOT choose any ticker
+    listed as excluded: {excluded_tickers}. If that is "none", there are no exclusions.
+    If every strong candidate is excluded, pick the next-best eligible names and note the
+    constraint. Your deliverable has two parts: (1) A clear podium of rank 1 (winner),
+    rank 2 (runner-up), and rank 3 (third place)—each with a 2-3 sentence bull case and
+    a one-to-two sentence explanation of its decisive edge over the next-ranked pick.
+    (2) A full deep-dive on rank 1: thesis in 3-5 bullets, exactly 3 risks, what would
+    invalidate the thesis, and a disclaimer that this is educational research only—not
+    personalized financial, legal, or tax advice.
   expected_output: >
-    A structured object (Pydantic/JSON) with these exact fields: primary_ticker (symbol
-    only), company_name, thesis_bullets (3-5 strings), risks (exactly 3 strings),
-    invalidation_triggers (string), disclaimer (string), runner_up_ticker,
-    runner_up_rationale (one sentence), exclusion_constraint_note (string or null if N/A),
-    compared_tickers (array of 2-8 objects, each with ticker and why_primary_wins strings).
-    compared_tickers must list OTHER names you seriously evaluated (not the primary);
-    each why_primary_wins explains why the primary was preferred or what trade-off mattered.
-    Do not duplicate the primary ticker; runner-up may also appear in compared_tickers
-    if you expand on the same name with more detail than runner_up_rationale, or omit it
-    there to avoid redundancy. Populate every required field; use null only for
-    exclusion_constraint_note when no exclusion forced a compromise.
+    A structured object (Pydantic/JSON) with these exact fields:
+    primary_ticker (symbol only, matches rank 1 in top_three),
+    company_name (full name for primary),
+    top_three (array of EXACTLY 3 objects, each with: rank (int 1/2/3), ticker (symbol),
+      company_name (string), brief_case (2-3 sentence bull case), edge_over_next (1-2
+      sentences — for rank 1: decisive advantage over rank 2; for rank 2: what it lacked
+      vs rank 1 but why it beats rank 3; for rank 3: what it beat in the broader list but
+      lost to rank 2)),
+    thesis_bullets (3-5 strings for the winner),
+    risks (exactly 3 strings for the winner),
+    invalidation_triggers (string),
+    disclaimer (string),
+    runner_up_ticker (must match top_three rank 2 ticker),
+    runner_up_rationale (one sentence),
+    exclusion_constraint_note (string or null if N/A),
+    compared_tickers (array of 1-8 objects with ticker and why_primary_wins, for names
+      outside the top 3 that were seriously evaluated).
+    The top_three rank 1 ticker MUST equal primary_ticker. Populate every required field;
+    use null only for exclusion_constraint_note when no exclusion forced a compromise.
   agent: investment_strategist

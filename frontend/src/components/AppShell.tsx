@@ -1,5 +1,5 @@
-import { NavLink, Outlet } from "react-router-dom"
-import { History, LayoutDashboard, Layers, LogOut } from "lucide-react"
+import { NavLink, Outlet, useNavigate } from "react-router-dom"
+import { BarChart2, History, LayoutDashboard, Layers, LogOut, Sparkles, Zap } from "lucide-react"
 import { useSession } from "../session/SessionContext"
 import { useEffect, useState } from "react"
 import { apiJson } from "../api/client"
@@ -18,6 +18,7 @@ const navClass = ({ isActive }: { isActive: boolean }) =>
 
 export function AppShell() {
   const { getAccessToken, logout } = useSession()
+  const navigate = useNavigate()
   const [me, setMe] = useState<UserOut | null>(null)
 
   useEffect(() => {
@@ -40,7 +41,7 @@ export function AppShell() {
   }, [getAccessToken])
 
   return (
-    <div className="flex min-h-screen flex-col bg-surface">
+    <div className="flex h-dvh min-h-0 flex-col overflow-hidden bg-surface">
       <header
         role="banner"
         className="shrink-0 border-b border-outline-ghost bg-surface-container-lowest"
@@ -58,8 +59,10 @@ export function AppShell() {
       </header>
 
       <div className="flex min-h-0 min-w-0 flex-1">
-        <aside className="flex w-56 shrink-0 flex-col border-r border-outline-ghost bg-surface-container-lowest shadow-[2px_0_12px_rgb(25_28_30_/0.04)]">
-          <div className="border-b border-outline-ghost px-4 py-4">
+        <aside className="flex min-h-0 w-56 shrink-0 flex-col border-r border-outline-ghost bg-surface-container-lowest shadow-[2px_0_12px_rgb(25_28_30_/0.04)]">
+          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="border-b border-outline-ghost px-4 py-4 space-y-3">
+            {/* Avatar + name row */}
             <div className="flex items-center gap-3">
               {me?.picture_url ? (
                 <img
@@ -87,8 +90,62 @@ export function AppShell() {
                 </p>
               </div>
             </div>
+
+            {/* Plan badge */}
+            {me && (
+              me.plan === "pro" ? (
+                <div className="flex items-center gap-1.5 rounded-md bg-emerald-950 px-2.5 py-1.5 ring-1 ring-primary-container/30">
+                  <Zap className="h-3 w-3 shrink-0 text-primary-container" strokeWidth={2} aria-hidden />
+                  <span className="text-[11px] font-bold uppercase tracking-wide text-primary-container">
+                    Pro plan
+                  </span>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 rounded-md border border-outline-ghost bg-surface px-2.5 py-1 ring-0">
+                      <span className="text-[11px] font-semibold text-on-surface/60 uppercase tracking-wide">
+                        Free plan
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-medium text-on-surface/45">
+                      {me.runs_today >= 1 ? "0" : "1"} left today
+                    </span>
+                  </div>
+
+                  {/* Daily usage bar */}
+                  <div className="space-y-1">
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-outline-ghost">
+                      <div
+                        className={[
+                          "h-full rounded-full transition-all duration-500",
+                          me.runs_today >= 1
+                            ? "w-full bg-red-400/70"
+                            : "w-0 bg-primary-container",
+                        ].join(" ")}
+                      />
+                    </div>
+                    <p className="text-[10px] text-on-surface/45">
+                      {me.runs_today >= 1
+                        ? "Daily research used · resets at midnight UTC"
+                        : "1 sector research per day"}
+                    </p>
+                  </div>
+
+                  {/* Upgrade CTA */}
+                  <button
+                    type="button"
+                    onClick={() => navigate("/app/upgrade")}
+                    className="flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-md border border-primary-container/30 bg-primary-container/10 px-2.5 py-1.5 text-[11px] font-semibold text-primary-container transition hover:bg-primary-container/18"
+                  >
+                    <Sparkles className="h-3 w-3" strokeWidth={2} aria-hidden />
+                    Upgrade to Pro · $2.99/mo
+                  </button>
+                </div>
+              )
+            )}
           </div>
-          <nav className="flex flex-1 flex-col gap-1 p-3">
+          <nav className="flex flex-col gap-1 p-3">
             <NavLink to="/app/dashboard" className={navClass}>
               {({ isActive }) => (
                 <>
@@ -137,8 +194,25 @@ export function AppShell() {
                 </>
               )}
             </NavLink>
+            <NavLink to="/app/track-record" className={navClass}>
+              {({ isActive }) => (
+                <>
+                  <BarChart2
+                    className={
+                      isActive
+                        ? "h-4 w-4 shrink-0 text-primary-container"
+                        : "h-4 w-4 shrink-0 text-on-surface/40 group-hover:text-on-surface/55"
+                    }
+                    strokeWidth={1.75}
+                    aria-hidden
+                  />
+                  Track Record
+                </>
+              )}
+            </NavLink>
           </nav>
-          <div className="border-t border-outline-ghost p-3">
+          </div>
+          <div className="shrink-0 border-t border-outline-ghost bg-surface-container-lowest p-3">
             <button
               type="button"
               onClick={() => void logout()}

@@ -22,7 +22,6 @@ from crewai.events.types.task_events import (
 from market_researcher.crew import MarketResearcher
 from market_researcher.db import (
     excluded_tickers_prompt,
-    get_active_exclusions,
     normalize_sector,
     save_run,
     upsert_user_from_claims,
@@ -139,16 +138,12 @@ def run_research_for_user(
         user = upsert_user_from_claims(claims)
         user_id = user.id
         norm = normalize_sector(sector)
-        excluded = get_active_exclusions(user_id, norm)
         year = current_year or str(datetime.now().year)
-        inputs = build_research_inputs(sector, excluded, year)
+        # Exclusion list removed: caching + daily limits make repeated same-sector runs
+        # obsolete, so we always start fresh with no ticker exclusions.
+        inputs = build_research_inputs(sector, [], year)
 
-        notify(
-            {
-                "type": "research_inputs_ready",
-                "excluded_tickers": excluded,
-            }
-        )
+        notify({"type": "research_inputs_ready"})
 
         crew = MarketResearcher().crew(cache=False)
         output = crew.kickoff(inputs=inputs)

@@ -1,3 +1,10 @@
+/** Sectors free users may research (display names; must match RESEARCH_SECTORS entries). */
+export const FREE_TIER_RESEARCHABLE_SECTORS: readonly string[] = [
+  "AI chips",
+  "Cloud infrastructure",
+  "Healthcare technology",
+]
+
 /** Curated sector themes for research tiles; replace with GET /sectors when available. */
 export const RESEARCH_SECTORS: string[] = [
   "AI chips",

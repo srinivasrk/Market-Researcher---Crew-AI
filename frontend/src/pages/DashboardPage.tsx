@@ -1,12 +1,33 @@
 import { useEffect, useMemo, useState } from "react"
 import { Link } from "react-router-dom"
-import { ChevronRight } from "lucide-react"
+import { ChevronRight, Sparkles } from "lucide-react"
 import { apiJson } from "../api/client"
-import { MOCK_TOP_STOCKS } from "../data/mockStocks"
+import type {
+  DashboardTopPicksResponse,
+  ResearchHistoryRow,
+  ResearchRunDetail,
+  UserOut,
+} from "../api/types"
 import { companyNameFromReport } from "../components/ResearchRunViews"
 import { getSectorTileTheme } from "../data/sectorTileThemes"
 import { useSession } from "../session/SessionContext"
-import type { ResearchHistoryRow, ResearchRunDetail } from "../api/types"
+
+function fmtClose(v: number | null | undefined) {
+  if (v == null || Number.isNaN(Number(v))) return "—"
+  return `$${Number(v).toFixed(2)}`
+}
+
+function fmtChg(v: number | null | undefined) {
+  if (v == null || Number.isNaN(Number(v))) return "—"
+  const n = Number(v)
+  const pos = n >= 0
+  return `${pos ? "+" : ""}${n.toFixed(2)}%`
+}
+
+function chgClass(v: number | null | undefined) {
+  if (v == null || Number.isNaN(Number(v))) return "text-on-surface/55"
+  return Number(v) >= 0 ? "text-primary-container" : "text-red-600"
+}
 
 /** Plain summary lines from saved report markdown for dashboard preview. */
 function reportSnippetFromMarkdown(
@@ -49,26 +70,43 @@ const TICKER_CHIP_STYLES = [
 
 export function DashboardPage() {
   const { getAccessToken } = useSession()
+  const [me, setMe] = useState<UserOut | null>(null)
   const [history, setHistory] = useState<ResearchHistoryRow[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [latestDetail, setLatestDetail] = useState<ResearchRunDetail | null>(null)
   const [latestDetailStatus, setLatestDetailStatus] = useState<
     "idle" | "loading" | "ok" | "error"
   >("idle")
+  const [picks, setPicks] = useState<DashboardTopPicksResponse | null>(null)
+  const [picksError, setPicksError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      try {
-        const token = await getAccessToken()
-        if (!token) return
-        const rows = await apiJson<ResearchHistoryRow[]>("/research/history?limit=100", {
+      const token = await getAccessToken()
+      if (!token) return
+      // Fetch /me, history, and dashboard picks in parallel
+      const [profileResult, historyResult, picksResult] = await Promise.allSettled([
+        apiJson<UserOut>("/me", { accessToken: token }),
+        apiJson<ResearchHistoryRow[]>("/research/history?limit=100", { accessToken: token }),
+        apiJson<DashboardTopPicksResponse>("/research/dashboard-top-picks", {
           accessToken: token,
-        })
-        if (!cancelled) setHistory(rows)
-      } catch (e) {
-        if (!cancelled)
-          setLoadError(e instanceof Error ? e.message : "Failed to load history")
+        }),
+      ])
+      if (cancelled) return
+      if (profileResult.status === "fulfilled") setMe(profileResult.value)
+      if (historyResult.status === "fulfilled") setHistory(historyResult.value)
+      else setLoadError("Failed to load history")
+      if (picksResult.status === "fulfilled") {
+        setPicks(picksResult.value)
+        setPicksError(null)
+      } else {
+        setPicks(null)
+        setPicksError(
+          picksResult.status === "rejected" && picksResult.reason instanceof Error
+            ? picksResult.reason.message
+            : "Failed to load market data",
+        )
       }
     })()
     return () => {
@@ -211,6 +249,27 @@ export function DashboardPage() {
           </div>
         </div>
 
+        {/* Pro upsell banner — shown for free users only */}
+        {me && me.plan !== "pro" && (
+          <div className="mt-5 flex items-center gap-3 rounded-xl border border-primary-container/20 bg-gradient-to-r from-primary-container/10 to-surface-container-lowest px-4 py-3">
+            <Sparkles className="h-4 w-4 shrink-0 text-primary-container" strokeWidth={1.75} aria-hidden />
+            <p className="flex-1 text-sm text-on-surface/75">
+              <span className="font-semibold text-on-surface">Free plan</span>
+              {" · "}
+              {me.runs_today >= 1
+                ? "You've used today's research. "
+                : "1 research/day on AI chips, Cloud infrastructure, or Healthcare technology. "}
+              Upgrade to Pro for all sectors, email alerts, and more.
+            </p>
+            <Link
+              to="/app/upgrade"
+              className="shrink-0 rounded-lg bg-primary-container px-3 py-1.5 text-xs font-bold text-surface-container-lowest transition hover:opacity-90"
+            >
+              See Pro →
+            </Link>
+          </div>
+        )}
+
         {latestDisplay ? (
           <div className="mt-6 overflow-hidden rounded-2xl border border-primary-container/20 bg-gradient-to-br from-primary-container/10 via-surface-container-lowest to-surface-container-lowest shadow-[0_8px_28px_rgba(25,28,30,0.06)]">
             <div className="flex flex-col gap-5 p-5 sm:flex-row sm:items-start sm:justify-between sm:gap-6 sm:p-6">
@@ -301,53 +360,193 @@ export function DashboardPage() {
             className="h-2 w-2 rounded-full bg-primary-container shadow-[0_0_8px_rgba(16,185,129,0.45)]"
             aria-hidden
           />
-          Top picks (placeholder data)
+          Latest research — top 3
         </h2>
         <p className="mt-1 text-sm text-on-surface/75">
-          Static sample closes until your stock API is connected.
+          From your most recent sector report. Prices refresh at most once per 24 hours.
         </p>
-        <div className="mt-4 overflow-hidden rounded border border-outline-ghost bg-surface-container-lowest shadow-[0_4px_20px_rgba(25,28,30,0.05)]">
-          <table className="min-w-full text-left text-sm">
-            <thead className="bg-primary-container text-xs font-semibold uppercase tracking-wide text-surface-container-lowest">
-              <tr>
-                <th className="px-4 py-3">Symbol</th>
-                <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3 text-right">Close</th>
-                <th className="px-4 py-3 text-right">Change</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-outline-ghost bg-surface-container-lowest">
-              {MOCK_TOP_STOCKS.map((s, i) => (
-                <tr
-                  key={s.symbol}
-                  className={
-                    i % 2 === 0
-                      ? "bg-surface-container-lowest text-on-surface"
-                      : "bg-surface text-on-surface"
-                  }
-                >
-                  <td className="px-4 py-3 font-semibold text-primary-container">
-                    {s.symbol}
-                  </td>
-                  <td className="px-4 py-3 text-on-surface/75">{s.name}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-on-surface">
-                    ${s.close.toFixed(2)}
-                  </td>
-                  <td
-                    className={`px-4 py-3 text-right font-medium tabular-nums ${
-                      s.changePct >= 0
-                        ? "text-primary-container"
-                        : "text-red-600"
-                    }`}
-                  >
-                    {s.changePct >= 0 ? "+" : ""}
-                    {s.changePct.toFixed(2)}%
-                  </td>
+        {picksError ? (
+          <p className="mt-3 text-sm text-red-600">{picksError}</p>
+        ) : picks === null ? (
+          <p className="mt-4 text-sm text-on-surface/55">Loading…</p>
+        ) : picks.latest_top_three.length === 0 ? (
+          <p className="mt-4 rounded border border-dashed border-outline-variant/60 bg-surface-container-lowest px-4 py-6 text-center text-sm text-on-surface/70">
+            No runs yet. Start from{" "}
+            <Link to="/app/sectors" className="font-semibold text-primary-container underline-offset-2 hover:underline">
+              Sectors
+            </Link>
+            .
+          </p>
+        ) : (
+          <div className="mt-4 overflow-hidden rounded border border-outline-ghost bg-surface-container-lowest shadow-[0_4px_20px_rgba(25,28,30,0.05)]">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-primary-container text-xs font-semibold uppercase tracking-wide text-surface-container-lowest">
+                <tr>
+                  <th className="px-4 py-3">#</th>
+                  <th className="px-4 py-3">Symbol</th>
+                  <th className="px-4 py-3">Name</th>
+                  <th className="px-4 py-3 text-right">Close</th>
+                  <th className="px-4 py-3 text-right">Change</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-outline-ghost bg-surface-container-lowest">
+                {picks.latest_top_three.map((r, i) => (
+                  <tr
+                    key={`${r.ticker}-${i}`}
+                    className={
+                      i % 2 === 0
+                        ? "bg-surface-container-lowest text-on-surface"
+                        : "bg-surface text-on-surface"
+                    }
+                  >
+                    <td className="px-4 py-3 tabular-nums text-on-surface/70">{r.rank ?? "—"}</td>
+                    <td className="px-4 py-3 font-semibold text-primary-container">{r.ticker}</td>
+                    <td className="px-4 py-3 text-on-surface/75">{r.name ?? "—"}</td>
+                    <td className="px-4 py-3 text-right tabular-nums text-on-surface">
+                      {fmtClose(r.close)}
+                    </td>
+                    <td
+                      className={`px-4 py-3 text-right font-medium tabular-nums ${chgClass(r.change_pct)}`}
+                    >
+                      {fmtChg(r.change_pct)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section>
+        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-primary-container">
+          <span
+            className="h-2 w-2 rounded-full bg-primary-container shadow-[0_0_8px_rgba(16,185,129,0.45)]"
+            aria-hidden
+          />
+          Top pick by sector
+        </h2>
+        <p className="mt-1 text-sm text-on-surface/75">
+          Your most recent #1 in each sector you have researched.
+        </p>
+        {picksError ? (
+          <p className="mt-3 text-sm text-on-surface/55">Unavailable — see error above.</p>
+        ) : picks === null ? (
+          <p className="mt-4 text-sm text-on-surface/55">Loading…</p>
+        ) : picks.per_sector.length === 0 ? (
+          <p className="mt-4 rounded border border-dashed border-outline-variant/60 bg-primary-container/6 px-4 py-6 text-center text-sm text-on-surface/80">
+            Run sector research to see one row per sector here.
+          </p>
+        ) : (
+          <div className="mt-4 overflow-hidden rounded border border-outline-ghost bg-surface-container-lowest shadow-[0_4px_20px_rgba(25,28,30,0.05)]">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-primary-container text-xs font-semibold uppercase tracking-wide text-surface-container-lowest">
+                <tr>
+                  <th className="px-4 py-3">Sector</th>
+                  <th className="px-4 py-3">Symbol</th>
+                  <th className="px-4 py-3">Name</th>
+                  <th className="px-4 py-3 text-right">Close</th>
+                  <th className="px-4 py-3 text-right">Change</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-outline-ghost bg-surface-container-lowest">
+                {picks.per_sector.map((r, i) => (
+                  <tr
+                    key={r.run_id ?? `${r.ticker}-${i}`}
+                    className={
+                      i % 2 === 0
+                        ? "bg-surface-container-lowest text-on-surface"
+                        : "bg-surface text-on-surface"
+                    }
+                  >
+                    <td className="px-4 py-3 text-on-surface/85">{r.sector ?? "—"}</td>
+                    <td className="px-4 py-3 font-semibold text-primary-container">{r.ticker}</td>
+                    <td className="px-4 py-3 text-on-surface/75">{r.name ?? "—"}</td>
+                    <td className="px-4 py-3 text-right tabular-nums text-on-surface">
+                      {fmtClose(r.close)}
+                    </td>
+                    <td
+                      className={`px-4 py-3 text-right font-medium tabular-nums ${chgClass(r.change_pct)}`}
+                    >
+                      {fmtChg(r.change_pct)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section>
+        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-primary-container">
+          <span
+            className="h-2 w-2 rounded-full bg-primary-container shadow-[0_0_8px_rgba(16,185,129,0.45)]"
+            aria-hidden
+          />
+          AI daily picks (cross-sector)
+        </h2>
+        <p className="mt-1 text-sm text-on-surface/75">
+          Shared spotlight refreshed at most once per day (Serper + AI). Same list for all users.
+          {picks ? (
+            <>
+              {" "}
+              <span className="tabular-nums text-on-surface/60">
+                Source: {picks.showcase_source}
+                {picks.showcase_refreshed_at
+                  ? ` · Snapshot: ${new Date(picks.showcase_refreshed_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`
+                  : ""}
+              </span>
+            </>
+          ) : null}
+        </p>
+        {picksError ? (
+          <p className="mt-3 text-sm text-on-surface/55">Unavailable — see error above.</p>
+        ) : picks === null ? (
+          <p className="mt-4 text-sm text-on-surface/55">Loading…</p>
+        ) : (
+          <div className="mt-4 overflow-hidden rounded border border-outline-ghost bg-surface-container-lowest shadow-[0_4px_20px_rgba(25,28,30,0.05)]">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-primary-container text-xs font-semibold uppercase tracking-wide text-surface-container-lowest">
+                <tr>
+                  <th className="px-4 py-3">Symbol</th>
+                  <th className="px-4 py-3">Sector</th>
+                  <th className="px-4 py-3">Name</th>
+                  <th className="px-4 py-3">Note</th>
+                  <th className="px-4 py-3 text-right">Close</th>
+                  <th className="px-4 py-3 text-right">Change</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-outline-ghost bg-surface-container-lowest">
+                {picks.showcase_trending.map((r, i) => (
+                  <tr
+                    key={`${r.ticker}-${i}`}
+                    className={
+                      i % 2 === 0
+                        ? "bg-surface-container-lowest text-on-surface"
+                        : "bg-surface text-on-surface"
+                    }
+                  >
+                    <td className="px-4 py-3 font-semibold text-primary-container">{r.ticker}</td>
+                    <td className="max-w-[140px] px-4 py-3 text-on-surface/75">{r.sector ?? "—"}</td>
+                    <td className="px-4 py-3 text-on-surface/75">{r.name ?? "—"}</td>
+                    <td className="max-w-xs px-4 py-3 text-xs text-on-surface/60">
+                      {r.rationale ?? "—"}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums text-on-surface">
+                      {fmtClose(r.close)}
+                    </td>
+                    <td
+                      className={`px-4 py-3 text-right font-medium tabular-nums ${chgClass(r.change_pct)}`}
+                    >
+                      {fmtChg(r.change_pct)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       <section>

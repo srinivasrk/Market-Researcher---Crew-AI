@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import urllib.error
@@ -15,12 +16,27 @@ import jwt
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
-from market_researcher.db import get_run, init_db, list_runs_for_user, upsert_user_from_claims
+from market_researcher.db import (
+    clone_run_for_user,
+    count_user_runs_today,
+    get_run,
+    get_sector_cache,
+    init_db,
+    list_runs_for_user,
+    normalize_sector,
+    set_waitlist_joined,
+    upsert_sector_cache,
+    upsert_user_from_claims,
+)
+from market_researcher.services.dashboard_service import build_dashboard_top_picks
+from market_researcher.services.pdf_service import run_to_pdf_bytes
+from market_researcher.services.price_service import get_track_record
 from market_researcher.services.research_jobs import ResearchJob, create_research_job, get_research_job
 from market_researcher.services.research_service import run_research_for_user
 
@@ -262,11 +278,63 @@ class UserOut(BaseModel):
     provider_subject: str | None = None
     created_at: str
     updated_at: str
+    # Plan & quota — used by the frontend to render the free/pro badge and daily limit UI
+    plan: str = "free"                    # "free" | "pro"
+    runs_today: int = 0                   # research runs created today (UTC)
+    waitlist_joined: bool = False         # has the user joined the Pro waitlist?
+    waitlist_joined_at: str | None = None # ISO timestamp of when they joined
+
+
+# ---------------------------------------------------------------------------
+# Allowed sectors — must stay in sync with frontend/src/data/sectors.ts
+# Free tier subset: _FREE_TIER_SECTORS (see frontend FREE_TIER_RESEARCHABLE_SECTORS).
+# Stored as lowercase normalized strings (whitespace-collapsed) for matching.
+# ---------------------------------------------------------------------------
+_ALLOWED_SECTORS: frozenset[str] = frozenset(
+    {
+        "ai chips",
+        "cloud infrastructure",
+        "cybersecurity",
+        "healthcare technology",
+        "renewable energy",
+        "electric vehicles",
+        "semiconductors",
+        "consumer staples",
+        "financial services",
+        "defense & aerospace",
+        "digital payments",
+        "biotechnology",
+        "data centers & reits",
+        "copper & industrial metals",
+        "luxury goods",
+    }
+)
+
+# Free plan: only these sectors (normalized). Pro unlocks the full curated list.
+_FREE_TIER_SECTORS: frozenset[str] = frozenset(
+    {
+        "ai chips",
+        "cloud infrastructure",
+        "healthcare technology",
+    }
+)
 
 
 class ResearchRequest(BaseModel):
-    sector: str = Field(..., min_length=1, max_length=500)
+    sector: str = Field(..., min_length=1, max_length=200)
     session_id: str | None = Field(None, max_length=128)
+
+    @field_validator("sector")
+    @classmethod
+    def sector_must_be_allowed(cls, v: str) -> str:
+        normalized = " ".join(v.strip().split()).lower()
+        if normalized not in _ALLOWED_SECTORS:
+            raise ValueError(
+                f"Sector {v!r} is not supported. "
+                f"Allowed sectors: {', '.join(sorted(_ALLOWED_SECTORS))}."
+            )
+        # Return the stripped original casing (display names preserved)
+        return v.strip()
 
 
 class ResearchJobAccepted(BaseModel):
@@ -335,6 +403,14 @@ async def _run_research_job_lifecycle(job: ResearchJob) -> None:
         job.run_id = result.run_id
         job.recommended_ticker = result.recommended_ticker
         job.report_markdown = result.report_markdown
+
+    # Populate shared sector cache so subsequent requests serve this result instantly
+    upsert_sector_cache(
+        normalize_sector(job.sector),
+        result.run_id,
+        result.recommended_ticker,
+    )
+
     on_progress(
         {
             "type": "job_completed",
@@ -439,6 +515,7 @@ def create_app() -> FastAPI:
     @app.get("/me", response_model=UserOut)
     def me(claims: dict[str, Any] = Depends(get_claims)) -> UserOut:
         user = upsert_user_from_claims(claims)
+        runs_today = count_user_runs_today(user.id)
         return UserOut(
             id=user.id,
             email=user.email,
@@ -452,6 +529,40 @@ def create_app() -> FastAPI:
             provider_subject=user.provider_subject,
             created_at=user.created_at,
             updated_at=user.updated_at,
+            plan=user.plan,
+            runs_today=runs_today,
+            waitlist_joined=user.waitlist_joined,
+            waitlist_joined_at=user.waitlist_joined_at,
+        )
+
+    @app.post("/me/waitlist", response_model=UserOut)
+    def join_waitlist(claims: dict[str, Any] = Depends(get_claims)) -> UserOut:
+        """Idempotent — mark the authenticated user as having joined the Pro waitlist."""
+        user_id = str(claims.get("sub") or claims.get("user_id") or "")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Token missing sub")
+        user = upsert_user_from_claims(claims)
+        set_waitlist_joined(user.id)
+        # Re-fetch so waitlist_joined_at is populated from the DB
+        user = upsert_user_from_claims(claims)
+        runs_today = count_user_runs_today(user.id)
+        return UserOut(
+            id=user.id,
+            email=user.email,
+            email_verified=user.email_verified,
+            name=user.name,
+            username=user.username,
+            given_name=user.given_name,
+            family_name=user.family_name,
+            picture_url=user.picture_url,
+            provider=user.provider,
+            provider_subject=user.provider_subject,
+            created_at=user.created_at,
+            updated_at=user.updated_at,
+            plan=user.plan,
+            runs_today=runs_today,
+            waitlist_joined=user.waitlist_joined,
+            waitlist_joined_at=user.waitlist_joined_at,
         )
 
     @app.post("/research", response_model=ResearchJobAccepted)
@@ -462,10 +573,60 @@ def create_app() -> FastAPI:
         user_id = str(claims.get("sub") or claims.get("user_id") or "")
         if not user_id:
             raise HTTPException(status_code=401, detail="Token missing sub")
-        upsert_user_from_claims(claims)
-        job = create_research_job(
-            user_id, body.sector.strip(), body.session_id, claims
-        )
+
+        user = upsert_user_from_claims(claims)
+        sector = body.sector.strip()
+        sector_norm = normalize_sector(sector)
+
+        if user.plan != "pro" and sector_norm not in _FREE_TIER_SECTORS:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "pro_sector_required",
+                    "message": (
+                        "This sector is available on Pro. "
+                        "The free plan includes AI chips, Cloud infrastructure, "
+                        "and Healthcare technology only."
+                    ),
+                },
+            )
+
+        # ── 1. Daily limit (free) — must run before sector cache so cache hits
+        #     cannot bypass the one-run-per-day cap.
+        if user.plan != "pro" and count_user_runs_today(user_id) >= 1:
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "daily_limit_reached",
+                    "message": "Free plan allows 1 sector research per day. Upgrade to Pro for unlimited access.",
+                    "upgrade_url": "https://stocks.srini.fyi/upgrade",
+                },
+            )
+
+        # ── 2. Shared sector cache hit → return instantly, no CrewAI ────────────
+        cached = get_sector_cache(sector_norm)
+        if cached:
+            new_run_id = clone_run_for_user(cached["source_run_id"], user_id)
+            if new_run_id:
+                job = create_research_job(user_id, sector, body.session_id, claims)
+                with job.lock:
+                    job.status = "completed"
+                    job.run_id = new_run_id
+                    job.recommended_ticker = cached["recommended_ticker"]
+                    job.event_log = [
+                        {"type": "research_preparing", "sector": sector},
+                        {"type": "job_started", "job_id": job.job_id, "sector": sector},
+                        {
+                            "type": "job_completed",
+                            "run_id": new_run_id,
+                            "recommended_ticker": cached["recommended_ticker"],
+                            "from_cache": True,
+                        },
+                    ]
+                return ResearchJobAccepted(job_id=job.job_id)
+
+        # ── 3. Launch real CrewAI job (cache is written after completion) ──────
+        job = create_research_job(user_id, sector, body.session_id, claims)
         asyncio.create_task(_run_research_job_lifecycle(job))
         return ResearchJobAccepted(job_id=job.job_id)
 
@@ -554,6 +715,70 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=401, detail="Token missing sub")
         upsert_user_from_claims(claims)
         return list_runs_for_user(sub, limit=min(limit, 100))
+
+    @app.get("/research/track-record")
+    def research_track_record(
+        claims: dict[str, Any] = Depends(get_claims),
+    ) -> list[dict[str, Any]]:
+        """Return all runs for the authenticated user enriched with 30/60/90-day price returns."""
+        sub = str(claims.get("sub") or claims.get("user_id") or "")
+        if not sub:
+            raise HTTPException(status_code=401, detail="Token missing sub")
+        upsert_user_from_claims(claims)
+        return get_track_record(sub)
+
+    @app.get("/research/dashboard-top-picks")
+    async def research_dashboard_top_picks(
+        claims: dict[str, Any] = Depends(get_claims),
+    ) -> dict[str, Any]:
+        """Latest run top 3, per-sector winners, global AI showcase — with cached yfinance quotes."""
+        sub = str(claims.get("sub") or claims.get("user_id") or "")
+        if not sub:
+            raise HTTPException(status_code=401, detail="Token missing sub")
+        upsert_user_from_claims(claims)
+        return await run_in_threadpool(build_dashboard_top_picks, sub)
+
+    # NOTE: this route MUST be registered before /research/{run_id} so FastAPI
+    # does not interpret "pdf" as a run_id value.
+    @app.get("/research/{run_id}/pdf")
+    def research_get_pdf(
+        run_id: str,
+        claims: dict[str, Any] = Depends(get_claims),
+    ) -> StreamingResponse:
+        """Generate and stream a PDF of the research report for the given run."""
+        sub = str(claims.get("sub") or claims.get("user_id") or "")
+        if not sub:
+            raise HTTPException(status_code=401, detail="Token missing sub")
+        user = upsert_user_from_claims(claims)
+        if user.plan != "pro":
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "pro_pdf_required",
+                    "message": "PDF export is a Pro feature. Upgrade to download reports as PDF.",
+                },
+            )
+        row = get_run(run_id, sub)
+        if not row:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        try:
+            pdf_bytes = run_to_pdf_bytes(row)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"PDF generation failed: {exc}"
+            ) from exc
+
+        ticker = (row.get("recommended_ticker") or "report").upper().strip()
+        sector = (row.get("sector") or "sector").replace(" ", "_")
+        date_str = (row.get("created_at") or "")[:10]
+        filename = f"{ticker}_{sector}_{date_str}.pdf"
+
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     @app.get("/research/{run_id}")
     def research_get(

@@ -1,9 +1,38 @@
 import { useState, type FormEvent } from "react"
 import { Navigate } from "react-router-dom"
+import { Activity, Bot, FileDown, LineChart, Trophy } from "lucide-react"
 import { API_BASE_URL } from "../lib/config"
 import { APP_BRAND_NAME } from "../components/AppShell"
 import { useSession } from "../session/SessionContext"
 import type { DevLoginResponse } from "../api/types"
+
+const FEATURES = [
+  {
+    icon: Bot,
+    title: "Specialist research pipeline",
+    body: "Multiple AI roles work in order—gathering public-market context and producing a structured view of the sector.",
+  },
+  {
+    icon: Trophy,
+    title: "Ranked top three",
+    body: "Clear podium-style results with comparative reasoning and a deeper write-up on the leading name.",
+  },
+  {
+    icon: Activity,
+    title: "Live run status",
+    body: "Follow each stage of a research job as it progresses so you know what is running and when it finishes.",
+  },
+  {
+    icon: LineChart,
+    title: "Outcome tracking",
+    body: "Review earlier recommendations alongside simple 30 / 60 / 90-day price performance for context.",
+  },
+  {
+    icon: FileDown,
+    title: "Report export",
+    body: "Pro members can download any completed report as a PDF from history.",
+  },
+] as const
 
 function GoogleMark({ className }: { className?: string }) {
   return (
@@ -37,7 +66,6 @@ export function LoginPage() {
   const {
     isAuthenticated,
     isLoading,
-    loginWithAuth0,
     loginWithGoogle,
     loginWithDevToken,
     auth0Configured,
@@ -49,7 +77,24 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
-  if (!isLoading && isAuthenticated) {
+  if (isLoading) {
+    return (
+      <div
+        className="flex min-h-screen flex-col items-center justify-center bg-surface px-4"
+        role="status"
+        aria-live="polite"
+        aria-label="Loading"
+      >
+        <div
+          className="h-9 w-9 animate-spin rounded-full border-2 border-outline-ghost border-t-primary-container"
+          aria-hidden
+        />
+        <p className="mt-4 text-sm text-on-surface/55">Loading…</p>
+      </div>
+    )
+  }
+
+  if (isAuthenticated) {
     return <Navigate to="/app/dashboard" replace />
   }
 
@@ -81,79 +126,118 @@ export function LoginPage() {
     }
   }
 
+  const btnFocus =
+    "outline-none focus-visible:ring-2 focus-visible:ring-primary-container/35 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-container-lowest"
+
   return (
-    <div className="flex min-h-screen flex-col bg-surface">
+    <div className="relative flex min-h-screen flex-col overflow-x-hidden bg-surface text-on-surface">
+      <div
+        className="pointer-events-none absolute inset-0"
+        aria-hidden
+        style={{
+          backgroundImage:
+            "radial-gradient(ellipse 90% 70% at 0% -25%, rgb(16 185 129 / 0.1), transparent 52%), radial-gradient(ellipse 70% 50% at 100% 0%, rgb(16 185 129 / 0.06), transparent 48%)",
+        }}
+      />
+
       <header
         role="banner"
-        className="shrink-0 border-b border-outline-ghost bg-surface-container-lowest shadow-[0_1px_0_rgb(25_28_30_/0.04)]"
+        className="relative shrink-0 border-b border-outline-ghost bg-surface-container-lowest/90 backdrop-blur-md"
       >
-        <div className="mx-auto flex max-w-lg items-center px-6 py-5 sm:px-8">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-4 sm:px-8 sm:py-5">
           <div className="min-w-0 border-l-[3px] border-primary-container pl-3.5">
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-primary-container">
               Crew AI · Markets
             </p>
-            <p className="font-outfit text-xl font-semibold tracking-tight text-on-surface sm:text-2xl">
+            <p className="font-outfit text-xl font-semibold tracking-tight sm:text-2xl">
               {APP_BRAND_NAME}
             </p>
           </div>
         </div>
       </header>
 
-      <div className="relative flex flex-1 flex-col items-center justify-center px-4 py-10 sm:px-6">
-        <div
-          className="pointer-events-none absolute inset-0 opacity-[0.45]"
-          aria-hidden
-          style={{
-            backgroundImage:
-              "radial-gradient(ellipse 80% 50% at 50% -20%, rgb(16 185 129 / 0.14), transparent 55%), radial-gradient(ellipse 60% 40% at 100% 100%, rgb(16 185 129 / 0.06), transparent 50%)",
-          }}
-        />
+      <main className="relative mx-auto flex w-full max-w-6xl flex-1 flex-col gap-12 px-5 py-10 sm:px-8 lg:flex-row lg:items-stretch lg:gap-16 lg:py-16">
+        <section
+          className="animate-login-fade-up flex min-w-0 flex-1 flex-col lg:max-w-[28rem] lg:justify-center"
+          style={{ animationDelay: "30ms" }}
+          aria-labelledby="login-hero-heading"
+        >
+          <h1
+            id="login-hero-heading"
+            className="font-outfit text-[1.65rem] font-semibold leading-snug tracking-tight sm:text-4xl sm:leading-tight"
+          >
+            Sector research, ranked ideas, and a clear record of what came next.
+          </h1>
+          <p className="mt-4 max-w-prose text-[15px] leading-relaxed text-on-surface/70 sm:text-base">
+            Choose a sector, run a guided research workflow, and review results
+            in one place—including exports and historical performance for your
+            own analysis.
+          </p>
 
-        <div className="relative w-full max-w-md">
-          <div className="rounded-2xl border border-outline-ghost bg-surface-container-lowest/95 p-8 shadow-[0_12px_40px_rgba(25,28,30,0.08)] backdrop-blur-sm sm:p-9">
-            <h1 className="font-outfit text-2xl font-semibold tracking-tight text-on-surface">
-              Sign in
-            </h1>
-            <p className="mt-2 text-sm leading-relaxed text-on-surface/70">
-              Use your Google account or continue with Auth0 to access research
-              tools and dashboards.
-            </p>
+          <ul className="mt-9 space-y-0 sm:max-w-xl">
+            {FEATURES.map(({ icon: Icon, title, body }, i) => (
+              <li
+                key={title}
+                className="animate-login-fade-up flex gap-3.5 border-t border-outline-ghost py-4 first:border-t-0 first:pt-0 sm:grid sm:grid-cols-[2.75rem_1fr] sm:items-start sm:gap-x-1"
+                style={{ animationDelay: `${80 + i * 40}ms` }}
+              >
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary-container/[0.09] text-primary-container">
+                  <Icon className="h-[18px] w-[18px]" strokeWidth={2} aria-hidden />
+                </span>
+                <div className="min-w-0 pt-0.5">
+                  <p className="text-sm font-semibold text-on-surface">{title}</p>
+                  <p className="mt-1 text-sm leading-relaxed text-on-surface/62">
+                    {body}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ul>
+
+          <p className="mt-8 max-w-prose border-t border-outline-ghost pt-6 text-xs leading-relaxed text-on-surface/50">
+            This product is for research and educational use only. It does not
+            provide personalized investment, legal, or tax advice. Market data
+            can be incomplete or delayed; verify material facts independently
+            before making decisions.
+          </p>
+        </section>
+
+        <section
+          className="animate-login-fade-up flex w-full shrink-0 lg:w-[min(100%,400px)] lg:items-center"
+          style={{ animationDelay: "120ms" }}
+          aria-label="Sign in"
+        >
+          <div className="w-full rounded-2xl border border-outline-ghost bg-surface-container-lowest p-7 shadow-[0_16px_48px_-12px_rgba(25,28,30,0.12)] sm:p-8">
+            <h2 className="font-outfit text-xl font-semibold tracking-tight sm:text-[1.35rem]">
+              Sign in with Google
+            </h2>
 
             {auth0Configured ? (
-              <div className="mt-8 flex flex-col gap-3">
+              <div className="mt-6">
                 <button
                   type="button"
                   onClick={() => loginWithGoogle()}
-                  className="flex w-full items-center justify-center gap-3 rounded-xl border border-outline-ghost bg-surface-container-lowest px-4 py-3.5 text-sm font-semibold text-on-surface shadow-sm transition hover:border-outline-variant/40 hover:bg-surface"
+                  className={`flex w-full items-center justify-center gap-3 rounded-xl border border-outline-ghost bg-surface-container-lowest px-4 py-3.5 text-sm font-semibold text-on-surface shadow-sm transition duration-150 hover:border-on-surface/18 hover:bg-surface hover:shadow active:scale-[0.99] ${btnFocus}`}
                 >
                   <GoogleMark className="h-5 w-5 shrink-0" />
-                  Continue with Google
-                </button>
-                <button
-                  type="button"
-                  onClick={() => loginWithAuth0()}
-                  className="w-full rounded-xl bg-primary-container px-4 py-3.5 text-sm font-semibold text-surface-container-lowest shadow-md shadow-primary-container/20 transition hover:brightness-[1.03] active:brightness-[0.97]"
-                >
-                  Continue with Auth0
+                  Sign in with Google
                 </button>
               </div>
             ) : (
-              <p className="mt-8 rounded-xl border border-outline-ghost bg-surface/80 px-4 py-3 text-sm text-on-surface/75">
-                Sign-in is not available. Ask your administrator to enable
-                authentication for this app.
+              <p className="mt-8 rounded-xl border border-outline-ghost bg-surface px-4 py-3.5 text-sm text-on-surface/70">
+                Sign-in is not configured for this deployment. Contact your
+                administrator if you need access.
               </p>
             )}
 
             {showDevPasswordLogin ? (
               <form
                 onSubmit={(e) => void onDevSubmit(e)}
-                className="mt-8 space-y-4"
+                className="mt-8 space-y-4 rounded-xl border border-amber-200/90 bg-amber-50/50 p-4"
               >
-                <div className="border-t border-outline-ghost pt-6">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-on-surface/45">
-                    Development login
-                  </p>
-                </div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-amber-900/75">
+                  Development only
+                </p>
                 <div>
                   <label
                     htmlFor="username"
@@ -166,7 +250,7 @@ export function LoginPage() {
                     autoComplete="username"
                     value={username}
                     onChange={(ev) => setUsername(ev.target.value)}
-                    className="mt-1.5 w-full rounded-lg border border-outline-ghost bg-surface-container-lowest px-3 py-2.5 text-sm text-on-surface outline-none ring-primary-container focus:border-primary-container focus:ring-2 focus:ring-primary-container/25"
+                    className="mt-1.5 w-full rounded-lg border border-outline-ghost bg-surface-container-lowest px-3 py-2.5 text-sm text-on-surface outline-none ring-primary-container transition focus:border-primary-container focus:ring-2 focus:ring-primary-container/25"
                   />
                 </div>
                 <div>
@@ -182,7 +266,7 @@ export function LoginPage() {
                     autoComplete="current-password"
                     value={password}
                     onChange={(ev) => setPassword(ev.target.value)}
-                    className="mt-1.5 w-full rounded-lg border border-outline-ghost bg-surface-container-lowest px-3 py-2.5 text-sm text-on-surface outline-none ring-primary-container focus:border-primary-container focus:ring-2 focus:ring-primary-container/25"
+                    className="mt-1.5 w-full rounded-lg border border-outline-ghost bg-surface-container-lowest px-3 py-2.5 text-sm text-on-surface outline-none ring-primary-container transition focus:border-primary-container focus:ring-2 focus:ring-primary-container/25"
                   />
                 </div>
                 {error ? (
@@ -193,15 +277,24 @@ export function LoginPage() {
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="w-full rounded-xl border border-outline-ghost bg-surface-container-lowest px-4 py-3.5 text-sm font-semibold text-on-surface shadow-sm transition hover:bg-surface disabled:opacity-60"
+                  className={`w-full rounded-xl border border-outline-ghost bg-surface-container-lowest px-4 py-3 text-sm font-semibold text-on-surface shadow-sm transition duration-150 hover:bg-surface active:scale-[0.99] disabled:opacity-60 ${btnFocus}`}
                 >
-                  {submitting ? "Signing in…" : "Sign in (dev)"}
+                  {submitting ? "Signing in…" : "Sign in (development)"}
                 </button>
               </form>
             ) : null}
           </div>
+        </section>
+      </main>
+
+      <footer
+        className="relative mt-auto border-t border-outline-ghost bg-surface-container-lowest/80 py-4 text-center text-[11px] text-on-surface/45 backdrop-blur-sm"
+        role="contentinfo"
+      >
+        <div className="mx-auto max-w-6xl px-5 sm:px-8">
+          © {new Date().getFullYear()} {APP_BRAND_NAME}. All rights reserved.
         </div>
-      </div>
+      </footer>
     </div>
   )
 }

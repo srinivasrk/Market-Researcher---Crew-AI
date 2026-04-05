@@ -9,6 +9,11 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "pyjwt[crypto]>=2.9.0",
+    # Track record: stock price history
+    "yfinance>=0.2.50",
+    # PDF export — xhtml2pdf is pure Python, no system libs required (works on Windows)
+    "xhtml2pdf>=0.2.16",
+    "markdown>=3.7",
 ]
 
 [project.scripts]

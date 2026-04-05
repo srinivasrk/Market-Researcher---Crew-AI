@@ -59,7 +59,7 @@ Full Auth0 + Google Cloud steps: [repo root `README.md`](../README.md#authentica
 | Path | Notes |
 | --- | --- |
 | `/` | Redirects to `/app/dashboard` if authenticated, else `/login`. |
-| `/login` | **Continue with Google** (Auth0 `google-oauth2` connection) and **Continue with Auth0** (Universal Login); optional dev password login. |
+| `/login` | **Continue with Google** (Auth0 `google-oauth2` connection); optional dev password login. |
 | `/app` | Protected layout (`AppShell`); nested routes: |
 | `/app/dashboard` | Dashboard. |
 | `/app/sectors` | Sector tiles and research entry. |

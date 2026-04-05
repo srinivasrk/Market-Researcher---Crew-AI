@@ -35,4 +35,27 @@
   .font-outfit {
     font-family: "Outfit", ui-sans-serif, system-ui, sans-serif;
   }
+
+  @keyframes login-fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .animate-login-fade-up {
+    animation: login-fade-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-login-fade-up {
+      animation: none;
+      opacity: 1;
+      transform: none;
+    }
+  }
 }

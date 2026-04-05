@@ -40,6 +40,20 @@ def _ensure_users_username_column(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN username TEXT")
 
 
+def _ensure_users_plan_column(conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "plan" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN plan TEXT NOT NULL DEFAULT 'free'")
+
+
+def _ensure_users_waitlist_columns(conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "waitlist_joined" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN waitlist_joined INTEGER NOT NULL DEFAULT 0")
+    if "waitlist_joined_at" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN waitlist_joined_at TEXT")
+
+
 def init_db(conn: sqlite3.Connection | None = None) -> None:
     own = conn is None
     if conn is None:
@@ -48,6 +62,7 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS users (
+            -- NOTE: 'plan' column added via _ensure_users_plan_column migration below
                 id TEXT PRIMARY KEY,
                 email TEXT,
                 email_verified INTEGER,
@@ -64,6 +79,8 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
             """
         )
         _ensure_users_username_column(conn)
+        _ensure_users_plan_column(conn)
+        _ensure_users_waitlist_columns(conn)
         legacy = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='research_runs'"
         ).fetchone()
@@ -93,6 +110,41 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_runs_user_created
                 ON research_runs (user_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS sector_cache (
+                sector_normalized  TEXT PRIMARY KEY,
+                source_run_id      TEXT NOT NULL,
+                recommended_ticker TEXT NOT NULL,
+                cached_at          TEXT NOT NULL,
+                valid_until        TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS price_snapshots (
+                run_id        TEXT PRIMARY KEY REFERENCES research_runs(id) ON DELETE CASCADE,
+                ticker        TEXT NOT NULL,
+                pick_date     TEXT NOT NULL,
+                pick_price    REAL,
+                d30_price     REAL,
+                d60_price     REAL,
+                d90_price     REAL,
+                current_price REAL,
+                last_refreshed TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS ticker_quotes (
+                ticker         TEXT PRIMARY KEY,
+                last_close     REAL,
+                change_pct     REAL,
+                name           TEXT,
+                last_refreshed TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS showcase_snapshots (
+                id             TEXT PRIMARY KEY,
+                tickers_json   TEXT NOT NULL,
+                refreshed_at   TEXT NOT NULL,
+                source         TEXT NOT NULL DEFAULT 'crew'
+            );
             """
         )
         conn.commit()
@@ -127,6 +179,9 @@ class UserRecord:
     provider_subject: str | None
     created_at: str
     updated_at: str
+    plan: str = "free"            # "free" | "pro"
+    waitlist_joined: bool = False
+    waitlist_joined_at: str | None = None
 
 
 def _str_claim(value: Any) -> str | None:
@@ -272,6 +327,10 @@ def _row_to_user(row: sqlite3.Row) -> UserRecord:
         email_verified = True
     elif ev == 0:
         email_verified = False
+    keys = set(row.keys())
+    plan = str(row["plan"]) if "plan" in keys else "free"
+    waitlist_joined = bool(row["waitlist_joined"]) if "waitlist_joined" in keys else False
+    waitlist_joined_at = row["waitlist_joined_at"] if "waitlist_joined_at" in keys else None
     return UserRecord(
         id=row["id"],
         email=row["email"],
@@ -285,6 +344,9 @@ def _row_to_user(row: sqlite3.Row) -> UserRecord:
         provider_subject=row["provider_subject"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        plan=plan,
+        waitlist_joined=waitlist_joined,
+        waitlist_joined_at=waitlist_joined_at,
     )
 
 
@@ -321,6 +383,52 @@ def get_active_exclusions(
             (user_id, sector_normalized, now),
         ).fetchall()
         return sorted({r[0].upper() for r in rows})
+    finally:
+        if own:
+            conn.close()
+
+
+def count_user_runs_today(user_id: str, conn: sqlite3.Connection | None = None) -> int:
+    """Count research_runs created on today's UTC date for this user."""
+    own = conn is None
+    if conn is None:
+        conn = get_connection()
+    try:
+        # ISO date prefix e.g. "2026-04-04" — created_at is stored as ISO8601
+        today_prefix = utc_now().date().isoformat()
+        row = conn.execute(
+            """
+            SELECT COUNT(*) FROM research_runs
+            WHERE user_id = ? AND created_at >= ?
+            """,
+            (user_id, today_prefix),
+        ).fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        if own:
+            conn.close()
+
+
+def set_waitlist_joined(user_id: str, conn: sqlite3.Connection | None = None) -> None:
+    """Mark a user as having joined the Pro waitlist (idempotent)."""
+    own = conn is None
+    if conn is None:
+        conn = get_connection()
+    try:
+        now = _iso(utc_now())
+        conn.execute(
+            """
+            UPDATE users
+            SET waitlist_joined = 1,
+                waitlist_joined_at = CASE
+                    WHEN waitlist_joined = 0 THEN ?
+                    ELSE waitlist_joined_at
+                END
+            WHERE id = ?
+            """,
+            (now, user_id),
+        )
+        conn.commit()
     finally:
         if own:
             conn.close()
@@ -388,7 +496,8 @@ def list_runs_for_user(
     try:
         rows = conn.execute(
             """
-            SELECT id, sector, recommended_ticker, company_name, created_at, expires_at, session_id
+            SELECT id, sector, sector_normalized, recommended_ticker, company_name,
+                   created_at, expires_at, session_id
             FROM research_runs
             WHERE user_id = ?
             ORDER BY created_at DESC
@@ -414,6 +523,279 @@ def get_run(run_id: str, user_id: str, conn: sqlite3.Connection | None = None) -
             (run_id, user_id),
         ).fetchone()
         return {k: row[k] for k in row.keys()} if row else None
+    finally:
+        if own:
+            conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Sector cache — shared result per sector, valid for 24 h across all users
+# ---------------------------------------------------------------------------
+
+SECTOR_CACHE_TTL = timedelta(hours=24)
+
+
+def get_sector_cache(sector_normalized: str, conn: sqlite3.Connection | None = None) -> dict[str, Any] | None:
+    """Return a fresh cache entry for the sector, or None if stale/missing."""
+    own = conn is None
+    if conn is None:
+        conn = get_connection()
+    try:
+        now = _iso(utc_now())
+        row = conn.execute(
+            """
+            SELECT source_run_id, recommended_ticker, cached_at, valid_until
+            FROM sector_cache
+            WHERE sector_normalized = ? AND valid_until > ?
+            """,
+            (sector_normalized, now),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        if own:
+            conn.close()
+
+
+def upsert_sector_cache(
+    sector_normalized: str,
+    run_id: str,
+    recommended_ticker: str,
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    """Insert or replace the sector cache entry with a fresh 24-hour window."""
+    own = conn is None
+    if conn is None:
+        conn = get_connection()
+    try:
+        now = utc_now()
+        conn.execute(
+            """
+            INSERT INTO sector_cache (sector_normalized, source_run_id, recommended_ticker, cached_at, valid_until)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(sector_normalized) DO UPDATE SET
+                source_run_id      = excluded.source_run_id,
+                recommended_ticker = excluded.recommended_ticker,
+                cached_at          = excluded.cached_at,
+                valid_until        = excluded.valid_until
+            """,
+            (sector_normalized, run_id, recommended_ticker.upper().strip(), _iso(now), _iso(now + SECTOR_CACHE_TTL)),
+        )
+        conn.commit()
+    finally:
+        if own:
+            conn.close()
+
+
+def get_run_by_id(run_id: str, conn: sqlite3.Connection | None = None) -> dict[str, Any] | None:
+    """Fetch a research run by id with no user_id filter (used by cache clone)."""
+    own = conn is None
+    if conn is None:
+        conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM research_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        return {k: row[k] for k in row.keys()} if row else None
+    finally:
+        if own:
+            conn.close()
+
+
+def clone_run_for_user(
+    source_run_id: str,
+    user_id: str,
+    conn: sqlite3.Connection | None = None,
+) -> str | None:
+    """Copy a cached research run into the target user's history. Returns the new run_id."""
+    own = conn is None
+    if conn is None:
+        conn = get_connection()
+    try:
+        src = get_run_by_id(source_run_id, conn)
+        if not src:
+            return None
+        new_id = str(uuid.uuid4())
+        created = utc_now()
+        expires = created + RESEARCH_TTL
+        conn.execute(
+            """
+            INSERT INTO research_runs (
+                id, user_id, session_id, sector, sector_normalized,
+                recommended_ticker, company_name, report_markdown, created_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                new_id,
+                user_id,
+                src.get("session_id"),
+                src["sector"],
+                src["sector_normalized"],
+                src["recommended_ticker"],
+                src.get("company_name"),
+                src.get("report_markdown"),
+                _iso(created),
+                _iso(expires),
+            ),
+        )
+        conn.commit()
+        return new_id
+    finally:
+        if own:
+            conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Price snapshots (track-record feature)
+# ---------------------------------------------------------------------------
+
+def get_price_snapshot(run_id: str, conn: sqlite3.Connection | None = None) -> dict[str, Any] | None:
+    """Return cached price snapshot for a run, or None if not yet fetched."""
+    own = conn is None
+    if conn is None:
+        conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM price_snapshots WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        if own:
+            conn.close()
+
+
+def upsert_price_snapshot(run_id: str, data: dict[str, Any], conn: sqlite3.Connection | None = None) -> None:
+    """Insert or replace a price snapshot row."""
+    own = conn is None
+    if conn is None:
+        conn = get_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO price_snapshots
+                (run_id, ticker, pick_date, pick_price,
+                 d30_price, d60_price, d90_price, current_price, last_refreshed)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                pick_price     = excluded.pick_price,
+                d30_price      = excluded.d30_price,
+                d60_price      = excluded.d60_price,
+                d90_price      = excluded.d90_price,
+                current_price  = excluded.current_price,
+                last_refreshed = excluded.last_refreshed
+            """,
+            (
+                run_id,
+                data.get("ticker"),
+                data.get("pick_date"),
+                data.get("pick_price"),
+                data.get("d30_price"),
+                data.get("d60_price"),
+                data.get("d90_price"),
+                data.get("current_price"),
+                data.get("last_refreshed"),
+            ),
+        )
+        if own:
+            conn.commit()
+    finally:
+        if own:
+            conn.close()
+
+
+def get_ticker_quote_row(ticker: str, conn: sqlite3.Connection | None = None) -> dict[str, Any] | None:
+    """Return the cached ticker_quotes row for `ticker`, or None if absent."""
+    own = conn is None
+    if conn is None:
+        conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT ticker, last_close, change_pct, name, last_refreshed FROM ticker_quotes WHERE ticker = ?",
+            (ticker.upper().strip(),),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        if own:
+            conn.close()
+
+
+def upsert_ticker_quote_row(
+    ticker: str,
+    last_close: float | None,
+    change_pct: float | None,
+    name: str | None,
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    """Insert or replace a ticker_quotes row with a fresh last_refreshed timestamp."""
+    own = conn is None
+    if conn is None:
+        conn = get_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO ticker_quotes (ticker, last_close, change_pct, name, last_refreshed)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(ticker) DO UPDATE SET
+                last_close     = excluded.last_close,
+                change_pct     = excluded.change_pct,
+                name           = excluded.name,
+                last_refreshed = excluded.last_refreshed
+            """,
+            (ticker.upper().strip(), last_close, change_pct, name, _iso(utc_now())),
+        )
+        if own:
+            conn.commit()
+    finally:
+        if own:
+            conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Global daily showcase (dashboard — shared across users)
+# ---------------------------------------------------------------------------
+
+SHOWCASE_SNAPSHOT_ID = "global"
+
+
+def get_showcase_snapshot(
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, Any] | None:
+    own = conn is None
+    if conn is None:
+        conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM showcase_snapshots WHERE id = ?",
+            (SHOWCASE_SNAPSHOT_ID,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        if own:
+            conn.close()
+
+
+def upsert_showcase_snapshot(
+    tickers_json: str,
+    refreshed_at_iso: str,
+    source: str = "crew",
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    own = conn is None
+    if conn is None:
+        conn = get_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO showcase_snapshots (id, tickers_json, refreshed_at, source)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                tickers_json = excluded.tickers_json,
+                refreshed_at = excluded.refreshed_at,
+                source       = excluded.source
+            """,
+            (SHOWCASE_SNAPSHOT_ID, tickers_json, refreshed_at_iso, source),
+        )
+        if own:
+            conn.commit()
     finally:
         if own:
             conn.close()

@@ -1,0 +1,11 @@
+daily_showcase_task:
+  description: >
+    Use Serper with at most 4–6 short queries (e.g. "US stock market movers today",
+    "sector rotation {current_year}", "large cap earnings headlines") to identify five
+    distinct US equity tickers worth spotlighting. Each must be in a different sector.
+    Return structured output only: exactly five picks with ticker (uppercase symbol),
+    sector label, and one-sentence rationale tied to what you found in search.
+  expected_output: >
+    A structured object with exactly five picks: ticker, sector, rationale for each.
+    Tickers must be valid US symbols; sectors must be distinct.
+  agent: showcase_scout
