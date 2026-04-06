@@ -125,6 +125,10 @@ def run_research_for_user(
     current_year: str | None = None,
     progress_callback: ProgressCallback | None = None,
 ) -> ResearchResult:
+    from market_researcher.observability import ensure_crewai_langfuse_instrumentation
+
+    ensure_crewai_langfuse_instrumentation()
+
     def notify(payload: dict[str, Any]) -> None:
         if progress_callback:
             progress_callback(payload)

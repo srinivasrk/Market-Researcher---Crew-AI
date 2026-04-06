@@ -2,7 +2,8 @@
 Observability setup — AgentOps + Langfuse (via openinference-instrumentation-crewai).
 
 Call setup_observability() once at application startup (api.py lifespan).
-Both crews are instrumented automatically — no per-crew code needed.
+Langfuse initializes the client here; CrewAIInstrumentor runs lazily on first crew run
+(see ensure_crewai_langfuse_instrumentation) so platforms like Fly.io pass health checks quickly.
 
 Per official Langfuse docs (https://langfuse.com/integrations/frameworks/crewai):
   - langfuse.get_client() initialises the Langfuse SDK and wires up OTel internally
@@ -22,11 +23,43 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 
 logger = logging.getLogger(__name__)
 
 # Module-level reference so services can call langfuse_client.flush()
 langfuse_client = None
+
+_crewai_otel_lock = threading.Lock()
+_crewai_otel_instrumented = False
+
+
+def ensure_crewai_langfuse_instrumentation() -> None:
+    """Patch CrewAI for Langfuse after the HTTP server is up (keeps Fly health checks fast).
+
+    Importing/instrumenting CrewAI at process start can take minutes; defer until the first
+    crew run while Langfuse client stays initialized from setup_observability().
+    """
+    global _crewai_otel_instrumented
+
+    if langfuse_client is None:
+        return
+    with _crewai_otel_lock:
+        if _crewai_otel_instrumented:
+            return
+        try:
+            from openinference.instrumentation.crewai import CrewAIInstrumentor
+
+            CrewAIInstrumentor().instrument(skip_dep_check=True)
+            _crewai_otel_instrumented = True
+            logger.info(
+                "Langfuse: CrewAI instrumentation applied (lazy) → %s",
+                os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com"),
+            )
+        except ImportError as e:
+            logger.warning("Langfuse: CrewAI instrumentation missing dependency (%s) — skipping.", e)
+        except Exception as e:
+            logger.warning("Langfuse: CrewAI instrumentation failed (%s) — skipping.", e)
 
 
 def _setup_langfuse() -> bool:
@@ -40,7 +73,6 @@ def _setup_langfuse() -> bool:
 
     try:
         from langfuse import get_client
-        from openinference.instrumentation.crewai import CrewAIInstrumentor
 
         # get_client() reads LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_BASE_URL
         # from env and wires up the OTel TracerProvider internally
@@ -50,11 +82,8 @@ def _setup_langfuse() -> bool:
             logger.warning("Langfuse: auth check failed — verify your keys and LANGFUSE_BASE_URL.")
             return False
 
-        # Patches CrewAI to emit OTel spans automatically on every kickoff()
-        CrewAIInstrumentor().instrument(skip_dep_check=True)
-
         logger.info(
-            "Langfuse: instrumentation active → %s",
+            "Langfuse: client ready (CrewAI patch deferred until first crew run) → %s",
             os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com"),
         )
         return True

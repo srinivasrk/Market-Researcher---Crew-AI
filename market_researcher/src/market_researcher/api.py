@@ -6,6 +6,7 @@ import asyncio
 import io
 import json
 import os
+import threading
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -36,11 +37,9 @@ from market_researcher.db import (
     upsert_sector_cache,
     upsert_user_from_claims,
 )
-from market_researcher.services.dashboard_service import build_dashboard_top_picks
 from market_researcher.services.pdf_service import run_to_pdf_bytes
 from market_researcher.services.price_service import get_track_record
 from market_researcher.services.research_jobs import ResearchJob, create_research_job, get_research_job
-from market_researcher.services.research_service import run_research_for_user
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 load_dotenv(_PROJECT_ROOT / ".env")
@@ -374,6 +373,8 @@ async def _run_research_job_lifecycle(job: ResearchJob) -> None:
         {"type": "job_started", "job_id": job.job_id, "sector": job.sector}
     )
     try:
+        from market_researcher.services.research_service import run_research_for_user
+
         result = await run_in_threadpool(
             run_research_for_user,
             job.claims,
@@ -454,8 +455,14 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def _startup() -> None:
         init_db()
-        from market_researcher.observability import setup_observability
-        setup_observability()
+        # Langfuse auth_check / AgentOps can block on network; Starlette runs startup
+        # before accepting TCP — defer so Fly health checks see :8000 listening immediately.
+        def _setup_obs() -> None:
+            from market_researcher.observability import setup_observability
+
+            setup_observability()
+
+        threading.Thread(target=_setup_obs, daemon=True).start()
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -752,6 +759,8 @@ def create_app() -> FastAPI:
         if not sub:
             raise HTTPException(status_code=401, detail="Token missing sub")
         upsert_user_from_claims(claims)
+        from market_researcher.services.dashboard_service import build_dashboard_top_picks
+
         return await run_in_threadpool(build_dashboard_top_picks, sub)
 
     # NOTE: this route MUST be registered before /research/{run_id} so FastAPI

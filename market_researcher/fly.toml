@@ -1,0 +1,37 @@
+# Globally unique app name — change if `fly launch` says it's taken.
+app = "stocks-srini-fyi-api"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PYTHONIOENCODING = "utf-8"
+
+[[vm]]
+  cpus = 1
+  cpu_kind = "shared"
+  memory = "1gb"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[http_service.concurrency]
+  type = "requests"
+  hard_limit = 25
+  soft_limit = 20
+
+[[http_service.checks]]
+  interval = "15s"
+  timeout = "10s"
+  grace_period = "90s"
+  method = "GET"
+  path = "/health"
+
+[mounts]
+  source = "data"
+  destination = "/data"

@@ -1,0 +1,14 @@
+# Do not clobber the Linux image venv with a host copy / dev artifacts
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+.git/
+.gitignore
+data/
+*.md
+AGENTS.md
+debug_observability.py

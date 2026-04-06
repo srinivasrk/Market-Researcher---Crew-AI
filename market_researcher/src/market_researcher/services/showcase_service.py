@@ -58,6 +58,10 @@ def _picks_to_rows(picks: DailyShowcasePicks) -> list[dict[str, str | None]]:
 
 def _run_showcase_crew() -> DailyShowcasePicks | None:
     try:
+        from market_researcher.observability import ensure_crewai_langfuse_instrumentation
+
+        ensure_crewai_langfuse_instrumentation()
+
         year = str(utc_now().year)
         crew = ShowcaseResearcher().crew(cache=False)
         output = crew.kickoff(inputs={"current_year": year})
