@@ -3,6 +3,7 @@ import { Navigate } from "react-router-dom"
 import { Activity, Bot, FileDown, LineChart, Trophy } from "lucide-react"
 import { API_BASE_URL } from "../lib/config"
 import { APP_BRAND_NAME } from "../components/AppShell"
+import { LoadingIndicator } from "../components/LoadingIndicator"
 import { useSession } from "../session/SessionContext"
 import type { DevLoginResponse } from "../api/types"
 
@@ -79,17 +80,8 @@ export function LoginPage() {
 
   if (isLoading) {
     return (
-      <div
-        className="flex min-h-screen flex-col items-center justify-center bg-surface px-4"
-        role="status"
-        aria-live="polite"
-        aria-label="Loading"
-      >
-        <div
-          className="h-9 w-9 animate-spin rounded-full border-2 border-outline-ghost border-t-primary-container"
-          aria-hidden
-        />
-        <p className="mt-4 text-sm text-on-surface/55">Loading…</p>
+      <div className="flex min-h-screen flex-col items-center justify-center bg-surface px-4">
+        <LoadingIndicator layout="stacked" message="Loading…" size="lg" />
       </div>
     )
   }

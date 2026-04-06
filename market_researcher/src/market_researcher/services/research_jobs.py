@@ -25,6 +25,7 @@ class ResearchJob:
     recommended_ticker: str | None = None
     report_markdown: str | None = None
     error: str | None = None
+    reserved_free_daily_slot: bool = False
 
 
 _registry: dict[str, ResearchJob] = {}
@@ -38,6 +39,7 @@ def create_research_job(
     claims: dict[str, Any],
     *,
     queue_maxsize: int = 256,
+    reserved_free_daily_slot: bool = False,
 ) -> ResearchJob:
     job_id = str(uuid.uuid4())
     job = ResearchJob(
@@ -47,6 +49,7 @@ def create_research_job(
         session_id=session_id,
         claims=dict(claims),
         queue=asyncio.Queue(maxsize=queue_maxsize),
+        reserved_free_daily_slot=reserved_free_daily_slot,
     )
     with _registry_lock:
         _registry[job_id] = job

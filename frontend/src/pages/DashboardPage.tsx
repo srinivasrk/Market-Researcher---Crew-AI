@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useState } from "react"
 import { Link } from "react-router-dom"
 import { ChevronRight, Sparkles } from "lucide-react"
+import { LoadingIndicator } from "../components/LoadingIndicator"
 import { apiJson } from "../api/client"
 import type {
   DashboardTopPicksResponse,
   ResearchHistoryRow,
   ResearchRunDetail,
-  UserOut,
 } from "../api/types"
 import { companyNameFromReport } from "../components/ResearchRunViews"
 import { getSectorTileTheme } from "../data/sectorTileThemes"
 import { useSession } from "../session/SessionContext"
+import { useUserProfile } from "../session/UserProfileContext"
 
 function fmtClose(v: number | null | undefined) {
   if (v == null || Number.isNaN(Number(v))) return "—"
@@ -70,7 +71,7 @@ const TICKER_CHIP_STYLES = [
 
 export function DashboardPage() {
   const { getAccessToken } = useSession()
-  const [me, setMe] = useState<UserOut | null>(null)
+  const { me } = useUserProfile()
   const [history, setHistory] = useState<ResearchHistoryRow[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [latestDetail, setLatestDetail] = useState<ResearchRunDetail | null>(null)
@@ -84,30 +85,35 @@ export function DashboardPage() {
     let cancelled = false
     ;(async () => {
       const token = await getAccessToken()
-      if (!token) return
-      // Fetch /me, history, and dashboard picks in parallel
-      const [profileResult, historyResult, picksResult] = await Promise.allSettled([
-        apiJson<UserOut>("/me", { accessToken: token }),
-        apiJson<ResearchHistoryRow[]>("/research/history?limit=100", { accessToken: token }),
-        apiJson<DashboardTopPicksResponse>("/research/dashboard-top-picks", {
-          accessToken: token,
-        }),
-      ])
-      if (cancelled) return
-      if (profileResult.status === "fulfilled") setMe(profileResult.value)
-      if (historyResult.status === "fulfilled") setHistory(historyResult.value)
-      else setLoadError("Failed to load history")
-      if (picksResult.status === "fulfilled") {
-        setPicks(picksResult.value)
-        setPicksError(null)
-      } else {
-        setPicks(null)
-        setPicksError(
-          picksResult.status === "rejected" && picksResult.reason instanceof Error
-            ? picksResult.reason.message
-            : "Failed to load market data",
-        )
-      }
+      if (!token || cancelled) return
+      const opts = { accessToken: token }
+
+      void apiJson<ResearchHistoryRow[]>("/research/history?limit=100", opts)
+        .then((rows) => {
+          if (!cancelled) {
+            setHistory(rows)
+            setLoadError(null)
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setLoadError("Failed to load history")
+        })
+
+      void apiJson<DashboardTopPicksResponse>("/research/dashboard-top-picks", opts)
+        .then((data) => {
+          if (!cancelled) {
+            setPicks(data)
+            setPicksError(null)
+          }
+        })
+        .catch((reason: unknown) => {
+          if (!cancelled) {
+            setPicks(null)
+            setPicksError(
+              reason instanceof Error ? reason.message : "Failed to load market data",
+            )
+          }
+        })
     })()
     return () => {
       cancelled = true
@@ -321,7 +327,7 @@ export function DashboardPage() {
             </div>
             <div className="border-t border-outline-ghost/80 bg-surface-container-lowest/90 px-5 py-4 sm:px-6">
               {latestDetailStatus === "loading" ? (
-                <p className="text-sm text-on-surface/55">Loading report preview…</p>
+                <LoadingIndicator message="Loading report preview…" className="py-0.5" />
               ) : latestDetailStatus === "error" ? (
                 <p className="text-sm text-on-surface/55">
                   Couldn&apos;t load the report preview. Use{" "}
@@ -368,7 +374,7 @@ export function DashboardPage() {
         {picksError ? (
           <p className="mt-3 text-sm text-red-600">{picksError}</p>
         ) : picks === null ? (
-          <p className="mt-4 text-sm text-on-surface/55">Loading…</p>
+          <LoadingIndicator message="Loading…" className="mt-4" />
         ) : picks.latest_top_three.length === 0 ? (
           <p className="mt-4 rounded border border-dashed border-outline-variant/60 bg-surface-container-lowest px-4 py-6 text-center text-sm text-on-surface/70">
             No runs yet. Start from{" "}
@@ -432,7 +438,7 @@ export function DashboardPage() {
         {picksError ? (
           <p className="mt-3 text-sm text-on-surface/55">Unavailable — see error above.</p>
         ) : picks === null ? (
-          <p className="mt-4 text-sm text-on-surface/55">Loading…</p>
+          <LoadingIndicator message="Loading…" className="mt-4" />
         ) : picks.per_sector.length === 0 ? (
           <p className="mt-4 rounded border border-dashed border-outline-variant/60 bg-primary-container/6 px-4 py-6 text-center text-sm text-on-surface/80">
             Run sector research to see one row per sector here.
@@ -503,7 +509,7 @@ export function DashboardPage() {
         {picksError ? (
           <p className="mt-3 text-sm text-on-surface/55">Unavailable — see error above.</p>
         ) : picks === null ? (
-          <p className="mt-4 text-sm text-on-surface/55">Loading…</p>
+          <LoadingIndicator message="Loading…" className="mt-4" />
         ) : (
           <div className="mt-4 overflow-hidden rounded border border-outline-ghost bg-surface-container-lowest shadow-[0_4px_20px_rgba(25,28,30,0.05)]">
             <table className="min-w-full text-left text-sm">

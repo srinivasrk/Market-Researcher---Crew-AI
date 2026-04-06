@@ -147,6 +147,8 @@ def run_research_for_user(
 
         crew = MarketResearcher().crew(cache=False)
         output = crew.kickoff(inputs=inputs)
+        from market_researcher.observability import flush_langfuse
+        flush_langfuse()
         rec: InvestmentRecommendation | None = None
         if isinstance(getattr(output, "pydantic", None), InvestmentRecommendation):
             rec = output.pydantic

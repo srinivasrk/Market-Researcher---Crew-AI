@@ -6,13 +6,15 @@ import {
   RESEARCH_SECTORS,
 } from "../data/sectors"
 import { getSectorTileTheme } from "../data/sectorTileThemes"
+import { useActiveResearchRun } from "../session/ActiveResearchRunContext"
 import { useSession } from "../session/SessionContext"
+import { useUserProfile } from "../session/UserProfileContext"
 import {
   ResearchProgressPanel,
   type ResearchModalConnection,
 } from "../components/ResearchProgressPanel"
 import { PremiumUpsellModal } from "../components/PremiumUpsellModal"
-import type { ResearchJobAccepted, UserOut } from "../api/types"
+import type { ResearchJobAccepted } from "../api/types"
 
 type CardLayout = "featured" | "wide" | "new" | "standard"
 
@@ -52,7 +54,13 @@ function gridSpanClass(layout: CardLayout): string {
 
 export function SectorsPage() {
   const { getAccessToken } = useSession()
-  const [me, setMe] = useState<UserOut | null>(null)
+  const { me, refreshProfile } = useUserProfile()
+  const {
+    deferredLiveModal,
+    consumeDeferredLiveModal,
+    beginBackgroundRun,
+    clearBackgroundRun,
+  } = useActiveResearchRun()
   const [accessToken, setAccessToken] = useState<string | null>(null)
   const [query, setQuery] = useState("")
   const [busySector, setBusySector] = useState<string | null>(null)
@@ -64,21 +72,15 @@ export function SectorsPage() {
   } | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
 
-  // Fetch user plan + today's run count to drive quota UI
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       const token = await getAccessToken()
-      if (!token) return
       if (!cancelled) setAccessToken(token)
-      try {
-        const profile = await apiJson<UserOut>("/me", { accessToken: token })
-        if (!cancelled) setMe(profile)
-      } catch {
-        // non-fatal — quota banner just won't show
-      }
     })()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [getAccessToken])
 
   const [upsellOpen, setUpsellOpen] = useState(false)
@@ -94,10 +96,25 @@ export function SectorsPage() {
     [isKnownFreeUser],
   )
 
+  useEffect(() => {
+    if (!deferredLiveModal) return
+    setResearchModal({
+      sector: deferredLiveModal.sector,
+      blurb: deferredLiveModal.blurb,
+      connection: {
+        state: "live",
+        jobId: deferredLiveModal.jobId,
+        accessToken: deferredLiveModal.accessToken,
+      },
+    })
+    consumeDeferredLiveModal()
+  }, [deferredLiveModal, consumeDeferredLiveModal])
+
   const startResearch = useCallback(
     async (sector: string) => {
       setError(null)
       setBusySector(sector)
+      clearBackgroundRun()
       const blurb =
         SECTOR_BLURBS[sector] ??
         "Launch a focused crew research run for this theme."
@@ -122,6 +139,7 @@ export function SectorsPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ sector }),
         })
+        await refreshProfile()
         setResearchModal({
           sector,
           blurb,
@@ -150,7 +168,7 @@ export function SectorsPage() {
         setBusySector(null)
       }
     },
-    [getAccessToken],
+    [clearBackgroundRun, getAccessToken, refreshProfile],
   )
 
   const orderedSectors = useMemo(() => {
@@ -485,6 +503,8 @@ export function SectorsPage() {
           blurb={researchModal.blurb}
           connection={researchModal.connection}
           onClose={() => setResearchModal(null)}
+          onDone={() => void refreshProfile()}
+          onContinueInBackground={beginBackgroundRun}
         />
       ) : null}
 
@@ -494,7 +514,7 @@ export function SectorsPage() {
           accessToken={accessToken}
           waitlistJoined={me?.waitlist_joined ?? false}
           waitlistJoinedAt={me?.waitlist_joined_at ?? null}
-          onWaitlistJoined={(updatedMe) => setMe(updatedMe)}
+          onWaitlistJoined={() => void refreshProfile()}
         />
       )}
     </div>

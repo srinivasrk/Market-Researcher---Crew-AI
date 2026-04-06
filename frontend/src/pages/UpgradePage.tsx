@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import { Sparkles, Zap, Check } from "lucide-react"
 import { apiJson } from "../api/client"
 import { useSession } from "../session/SessionContext"
-import type { UserOut } from "../api/types"
+import { useUserProfile } from "../session/UserProfileContext"
 
 const PRO_FEATURES = [
   {
@@ -44,7 +44,7 @@ const PRO_FEATURES = [
 
 export function UpgradePage() {
   const { getAccessToken } = useSession()
-  const [me, setMe] = useState<UserOut | null>(null)
+  const { me, refreshProfile } = useUserProfile()
   const [accessToken, setAccessToken] = useState<string | null>(null)
   const [joining, setJoining] = useState(false)
   const [joinError, setJoinError] = useState<string | null>(null)
@@ -53,16 +53,11 @@ export function UpgradePage() {
     let cancelled = false
     ;(async () => {
       const token = await getAccessToken()
-      if (!token || cancelled) return
-      setAccessToken(token)
-      try {
-        const profile = await apiJson<UserOut>("/me", { accessToken: token })
-        if (!cancelled) setMe(profile)
-      } catch {
-        // non-fatal
-      }
+      if (!cancelled) setAccessToken(token ?? null)
     })()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [getAccessToken])
 
   async function handleJoinWaitlist() {
@@ -70,11 +65,11 @@ export function UpgradePage() {
     setJoining(true)
     setJoinError(null)
     try {
-      const updated = await apiJson<UserOut>("/me/waitlist", {
+      await apiJson("/me/waitlist", {
         method: "POST",
         accessToken,
       })
-      setMe(updated)
+      await refreshProfile()
     } catch {
       setJoinError("Something went wrong. Please try again.")
     } finally {

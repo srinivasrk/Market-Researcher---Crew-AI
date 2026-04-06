@@ -11,6 +11,7 @@ import {
 } from "lucide-react"
 import { apiJson, researchWebSocketUrl } from "../api/client"
 import type { ResearchRunDetail } from "../api/types"
+import type { LiveResearchRunInfo } from "../session/ActiveResearchRunContext"
 import {
   ResearchProcessAside,
   ResearchReportArticle,
@@ -28,6 +29,8 @@ type Props = {
   connection: ResearchModalConnection
   onClose: () => void
   onDone?: () => void
+  /** When the user closes the dialog while the job is still running, keep tracking in the shell. */
+  onContinueInBackground?: (run: LiveResearchRunInfo) => void
 }
 
 type TimelineVariant = "neutral" | "accent" | "ok" | "bad"
@@ -229,11 +232,13 @@ export function ResearchProgressPanel({
   connection,
   onClose,
   onDone,
+  onContinueInBackground,
 }: Props) {
   const titleId = useId()
   const [entries, setEntries] = useState<TimelineEntry[]>([])
   const [wsConnected, setWsConnected] = useState(false)
   const [lastPulse, setLastPulse] = useState<string | null>(null)
+  const [runReachedTerminal, setRunReachedTerminal] = useState(false)
   const [finalRunId, setFinalRunId] = useState<string | null>(null)
   const [completedDetail, setCompletedDetail] = useState<ResearchRunDetail | null>(null)
   const [reportPhase, setReportPhase] = useState<"idle" | "loading" | "ready" | "error">(
@@ -275,6 +280,7 @@ export function ResearchProgressPanel({
     setReportError(null)
     nextId.current = 0
     setLastPulse(null)
+    setRunReachedTerminal(false)
 
     const url = researchWebSocketUrl(jobId, accessToken)
     const ws = new WebSocket(url)
@@ -311,6 +317,7 @@ export function ResearchProgressPanel({
         }
         const last = data.events[data.events.length - 1] as Record<string, unknown> | undefined
         if (last?.type === "job_completed" || last?.type === "job_failed") {
+          setRunReachedTerminal(true)
           onDoneRef.current?.()
         }
         return
@@ -321,9 +328,11 @@ export function ResearchProgressPanel({
 
       if (data.type === "job_completed") {
         if (typeof data.run_id === "string") setFinalRunId(data.run_id)
+        setRunReachedTerminal(true)
         onDoneRef.current?.()
       }
       if (data.type === "job_failed") {
+        setRunReachedTerminal(true)
         onDoneRef.current?.()
       }
     }
@@ -388,6 +397,22 @@ export function ResearchProgressPanel({
     }
   }, [finalRunId, liveToken, connection.state])
 
+  const handleRequestClose = () => {
+    if (
+      connection.state === "live" &&
+      !runReachedTerminal &&
+      onContinueInBackground
+    ) {
+      onContinueInBackground({
+        sector,
+        blurb,
+        jobId: connection.jobId,
+        accessToken: connection.accessToken,
+      })
+    }
+    onClose()
+  }
+
   const showStarting = connection.state === "starting"
   const showError = connection.state === "error"
   const liveMeta =
@@ -416,7 +441,7 @@ export function ResearchProgressPanel({
       aria-modal="true"
       aria-labelledby={titleId}
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose()
+        if (e.target === e.currentTarget) handleRequestClose()
       }}
     >
       <div
@@ -462,7 +487,7 @@ export function ResearchProgressPanel({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleRequestClose}
             className="rounded-lg p-2 text-on-surface/50 transition hover:bg-surface hover:text-on-surface"
             aria-label="Close dialog"
           >
@@ -516,7 +541,7 @@ export function ResearchProgressPanel({
               <Link
                 to={`/app/history/${completedDetail.id}`}
                 className="inline-flex items-center gap-1 text-sm font-semibold text-primary-container hover:underline"
-                onClick={onClose}
+                onClick={handleRequestClose}
               >
                 Open this run in History
                 <ChevronRight className="h-4 w-4" aria-hidden />
@@ -536,7 +561,7 @@ export function ResearchProgressPanel({
               <Link
                 to={`/app/history/${finalRunId}`}
                 className="inline-flex items-center gap-1 text-sm font-semibold text-primary-container hover:underline"
-                onClick={onClose}
+                onClick={handleRequestClose}
               >
                 Try opening in History
                 <ChevronRight className="h-4 w-4" aria-hidden />

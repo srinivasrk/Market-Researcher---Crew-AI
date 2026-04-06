@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
+import { LoadingIndicator } from "../components/LoadingIndicator"
 import { apiJson } from "../api/client"
 import { getSectorTileTheme } from "../data/sectorTileThemes"
 import { useSession } from "../session/SessionContext"
@@ -117,7 +118,9 @@ export function HistoryPage() {
                   colSpan={4}
                   className="bg-surface px-4 py-12 text-center text-sm text-on-surface/65"
                 >
-                  Loading…
+                  <div className="flex justify-center">
+                    <LoadingIndicator message="Loading…" />
+                  </div>
                 </td>
               </tr>
             ) : null}

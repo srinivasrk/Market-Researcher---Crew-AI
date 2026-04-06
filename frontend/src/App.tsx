@@ -10,6 +10,8 @@ import { UpgradePage } from "./pages/UpgradePage"
 import { IndexRedirect } from "./routes/IndexRedirect"
 import { ProtectedRoute } from "./routes/ProtectedRoute"
 import { UnauthorizedBridge } from "./routes/UnauthorizedBridge"
+import { ActiveResearchRunProvider } from "./session/ActiveResearchRunContext"
+import { UserProfileProvider } from "./session/UserProfileContext"
 
 export default function App() {
   return (
@@ -22,7 +24,11 @@ export default function App() {
           path="/app"
           element={
             <ProtectedRoute>
-              <AppShell />
+              <UserProfileProvider>
+                <ActiveResearchRunProvider>
+                  <AppShell />
+                </ActiveResearchRunProvider>
+              </UserProfileProvider>
             </ProtectedRoute>
           }
         >

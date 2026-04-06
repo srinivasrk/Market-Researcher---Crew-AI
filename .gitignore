@@ -12,3 +12,7 @@ docs/HOSTING*
 
 # Temporary files
 docs/README.original.md
+
+# AgentOps (local session / trace logs)
+agentops.log
+**/agentops.log

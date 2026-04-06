@@ -61,6 +61,8 @@ def _run_showcase_crew() -> DailyShowcasePicks | None:
         year = str(utc_now().year)
         crew = ShowcaseResearcher().crew(cache=False)
         output = crew.kickoff(inputs={"current_year": year})
+        from market_researcher.observability import flush_langfuse
+        flush_langfuse()
         if isinstance(getattr(output, "pydantic", None), DailyShowcasePicks):
             return output.pydantic
         for task_out in reversed(getattr(output, "tasks_output", []) or []):

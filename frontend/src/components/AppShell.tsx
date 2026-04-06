@@ -1,9 +1,18 @@
-import { NavLink, Outlet, useNavigate } from "react-router-dom"
-import { BarChart2, History, LayoutDashboard, Layers, LogOut, Sparkles, Zap } from "lucide-react"
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
+import {
+  BarChart2,
+  History,
+  LayoutDashboard,
+  Layers,
+  Loader2,
+  LogOut,
+  Sparkles,
+  Zap,
+} from "lucide-react"
+import { useEffect, useRef } from "react"
+import { useActiveResearchRun } from "../session/ActiveResearchRunContext"
 import { useSession } from "../session/SessionContext"
-import { useEffect, useState } from "react"
-import { apiJson } from "../api/client"
-import type { UserOut } from "../api/types"
+import { useUserProfile } from "../session/UserProfileContext"
 
 /** Shown in the top banner, sidebar, and browser title (see `index.html`). */
 export const APP_BRAND_NAME = "Market Researcher"
@@ -17,28 +26,21 @@ const navClass = ({ isActive }: { isActive: boolean }) =>
   ].join(" ")
 
 export function AppShell() {
-  const { getAccessToken, logout } = useSession()
+  const { logout } = useSession()
   const navigate = useNavigate()
-  const [me, setMe] = useState<UserOut | null>(null)
+  const location = useLocation()
+  const { me, profileLoading, refreshProfile } = useUserProfile()
+  const { backgroundRun, requestOpenProgress } = useActiveResearchRun()
+  const skipNextPathRefresh = useRef(true)
 
   useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      const token = await getAccessToken()
-      if (!token) return
-      try {
-        const profile = await apiJson<UserOut>("/me", {
-          accessToken: token,
-        })
-        if (!cancelled) setMe(profile)
-      } catch {
-        if (!cancelled) setMe(null)
-      }
-    })()
-    return () => {
-      cancelled = true
+    if (skipNextPathRefresh.current) {
+      skipNextPathRefresh.current = false
+      return
     }
-  }, [getAccessToken])
+    const t = window.setTimeout(() => void refreshProfile(), 400)
+    return () => window.clearTimeout(t)
+  }, [location.pathname, refreshProfile])
 
   return (
     <div className="flex h-dvh min-h-0 flex-col overflow-hidden bg-surface">
@@ -64,7 +66,18 @@ export function AppShell() {
           <div className="border-b border-outline-ghost px-4 py-4 space-y-3">
             {/* Avatar + name row */}
             <div className="flex items-center gap-3">
-              {me?.picture_url ? (
+              {profileLoading ? (
+                <>
+                  <div
+                    className="h-11 w-11 shrink-0 animate-pulse rounded bg-outline-ghost/55 ring-2 ring-outline-ghost"
+                    aria-hidden
+                  />
+                  <div className="min-w-0 flex-1 space-y-2">
+                    <div className="h-4 max-w-[10rem] animate-pulse rounded bg-outline-ghost/50" />
+                    <div className="h-3 max-w-[6rem] animate-pulse rounded bg-outline-ghost/40" />
+                  </div>
+                </>
+              ) : me?.picture_url ? (
                 <img
                   src={me.picture_url}
                   alt=""
@@ -79,16 +92,18 @@ export function AppShell() {
                     .toUpperCase() || "?"}
                 </div>
               )}
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-on-surface">
-                  {me?.name ?? me?.username ?? me?.email ?? "Signed in"}
-                </p>
-                <p className="truncate text-xs text-on-surface/65">
-                  {me?.username
-                    ? `@${me.username}`
-                    : (me?.email ?? "\u00a0")}
-                </p>
-              </div>
+              {!profileLoading ? (
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-on-surface">
+                    {me?.name ?? me?.username ?? me?.email ?? "Signed in"}
+                  </p>
+                  <p className="truncate text-xs text-on-surface/65">
+                    {me?.username
+                      ? `@${me.username}`
+                      : (me?.email ?? "\u00a0")}
+                  </p>
+                </div>
+              ) : null}
             </div>
 
             {/* Plan badge */}
@@ -228,6 +243,34 @@ export function AppShell() {
           </div>
         </aside>
         <main className="min-h-0 min-w-0 flex-1 overflow-auto bg-surface">
+          {backgroundRun ? (
+            <div
+              className="sticky top-0 z-20 border-b border-amber-200/80 bg-amber-50/95 px-6 py-2.5 text-sm text-amber-950 shadow-sm backdrop-blur-sm lg:px-8"
+              role="status"
+              aria-live="polite"
+            >
+              <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <Loader2
+                    className="h-4 w-4 shrink-0 animate-spin text-amber-700"
+                    strokeWidth={2}
+                    aria-hidden
+                  />
+                  <span className="font-medium text-amber-950">
+                    Research running in the background:{" "}
+                    <span className="text-amber-900">{backgroundRun.sector}</span>
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => requestOpenProgress()}
+                  className="shrink-0 cursor-pointer rounded-lg border border-amber-300/90 bg-white/80 px-3 py-1.5 text-xs font-semibold text-amber-950 transition hover:bg-white"
+                >
+                  View progress
+                </button>
+              </div>
+            </div>
+          ) : null}
           <div className="mx-auto max-w-7xl px-6 py-8 lg:px-8">
             <Outlet />
           </div>

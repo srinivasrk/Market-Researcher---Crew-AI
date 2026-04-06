@@ -145,6 +145,13 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
                 refreshed_at   TEXT NOT NULL,
                 source         TEXT NOT NULL DEFAULT 'crew'
             );
+
+            CREATE TABLE IF NOT EXISTS free_daily_research_slot (
+                user_id      TEXT NOT NULL,
+                day_utc      TEXT NOT NULL,
+                reserved_at  TEXT NOT NULL,
+                PRIMARY KEY (user_id, day_utc)
+            );
             """
         )
         conn.commit()
@@ -257,6 +264,22 @@ def _normalize_profile_from_claims(claims: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _fallback_display_name_from_sub(sub: Any) -> str | None:
+    """When IdP claims have no name, derive a short sidebar label from Auth0-style sub."""
+    if not isinstance(sub, str) or "|" not in sub:
+        return None
+    conn_id = sub.split("|", 1)[0].lower()
+    if "google" in conn_id:
+        return "Google account"
+    if "github" in conn_id:
+        return "GitHub account"
+    if "linkedin" in conn_id:
+        return "LinkedIn account"
+    if "windowslive" in conn_id or "microsoft" in conn_id:
+        return "Microsoft account"
+    return "Signed in"
+
+
 def upsert_user_from_claims(claims: dict[str, Any], conn: sqlite3.Connection | None = None) -> UserRecord:
     """Persist or refresh user row from verified JWT/OIDC claims (never from client body)."""
     own = conn is None
@@ -272,6 +295,32 @@ def upsert_user_from_claims(claims: dict[str, Any], conn: sqlite3.Connection | N
         prof = _normalize_profile_from_claims(claims)
         sub_raw = claims.get("sub")
         provider_subject = str(sub_raw) if sub_raw is not None else None
+
+        prev = conn.execute(
+            "SELECT email, email_verified, name, username, given_name, family_name, picture_url "
+            "FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        if prev is not None:
+
+            def _prefer_new_str(new: str | None, old: str | None) -> str | None:
+                if new is not None and str(new).strip():
+                    return str(new).strip()
+                return old
+
+            prof["email"] = _prefer_new_str(prof["email"], prev["email"])
+            prof["name"] = _prefer_new_str(prof["name"], prev["name"])
+            prof["username"] = _prefer_new_str(prof["username"], prev["username"])
+            prof["given_name"] = _prefer_new_str(prof["given_name"], prev["given_name"])
+            prof["family_name"] = _prefer_new_str(prof["family_name"], prev["family_name"])
+            prof["picture_url"] = _prefer_new_str(prof["picture_url"], prev["picture_url"])
+            if prof["email_verified"] is None and prev["email_verified"] is not None:
+                prof["email_verified"] = prev["email_verified"]
+
+        if not prof["name"] or not str(prof["name"]).strip():
+            fb = _fallback_display_name_from_sub(claims.get("sub"))
+            if fb:
+                prof["name"] = fb
 
         raw_json = json.dumps(claims, default=str, sort_keys=True)[:8000]
 
@@ -407,6 +456,80 @@ def count_user_runs_today(user_id: str, conn: sqlite3.Connection | None = None) 
     finally:
         if own:
             conn.close()
+
+
+def has_free_daily_research_slot_reserved(
+    user_id: str, conn: sqlite3.Connection | None = None
+) -> bool:
+    """True if this user has reserved today's free-tier slot (in-flight real job)."""
+    own = conn is None
+    if conn is None:
+        conn = get_connection()
+    try:
+        today = utc_now().date().isoformat()
+        row = conn.execute(
+            """
+            SELECT 1 FROM free_daily_research_slot
+            WHERE user_id = ? AND day_utc = ?
+            """,
+            (user_id, today),
+        ).fetchone()
+        return row is not None
+    finally:
+        if own:
+            conn.close()
+
+
+def try_reserve_free_daily_research_slot(user_id: str) -> bool:
+    """Insert today's slot row. Returns True if this call reserved it, False if already taken."""
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        today = utc_now().date().isoformat()
+        cur = conn.execute(
+            """
+            INSERT OR IGNORE INTO free_daily_research_slot (user_id, day_utc, reserved_at)
+            VALUES (?, ?, ?)
+            """,
+            (user_id, today, _iso(utc_now())),
+        )
+        inserted = cur.rowcount > 0
+        conn.commit()
+        return inserted
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def release_free_daily_research_slot(
+    user_id: str, conn: sqlite3.Connection | None = None
+) -> None:
+    """Remove today's reservation (after job completes or fails). No-op if none."""
+    own = conn is None
+    if conn is None:
+        conn = get_connection()
+    try:
+        today = utc_now().date().isoformat()
+        conn.execute(
+            "DELETE FROM free_daily_research_slot WHERE user_id = ? AND day_utc = ?",
+            (user_id, today),
+        )
+        conn.commit()
+    finally:
+        if own:
+            conn.close()
+
+
+def runs_today_for_api(user_id: str, plan: str) -> int:
+    """Runs counted toward free daily quota: persisted rows plus in-flight reservation."""
+    c = count_user_runs_today(user_id)
+    if plan == "pro":
+        return c
+    if c >= 1:
+        return c
+    return 1 if has_free_daily_research_slot_reserved(user_id) else 0
 
 
 def set_waitlist_joined(user_id: str, conn: sqlite3.Connection | None = None) -> None:

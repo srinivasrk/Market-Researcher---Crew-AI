@@ -14,6 +14,11 @@ dependencies = [
     # PDF export — xhtml2pdf is pure Python, no system libs required (works on Windows)
     "xhtml2pdf>=0.2.16",
     "markdown>=3.7",
+    # Observability — Langfuse (openinference instruments CrewAI via OTel)
+    "langfuse>=2.0.0",
+    "openinference-instrumentation-crewai>=0.1.0",
+    # Observability — AgentOps
+    "agentops>=0.3.0",
 ]
 
 [project.scripts]

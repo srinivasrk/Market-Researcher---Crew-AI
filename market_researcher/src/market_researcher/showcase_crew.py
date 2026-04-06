@@ -4,7 +4,6 @@ from crewai import Agent, Crew, LLM, Process, Task
 from crewai.agents.agent_builder.base_agent import BaseAgent
 from crewai.project import CrewBase, agent, crew, task, tool
 from crewai_tools import SerperDevTool
-
 from market_researcher.schemas import DailyShowcasePicks
 
 

@@ -1,0 +1,49 @@
+# Langfuse — local observability stack (development only)
+#
+# Usage:
+#   docker compose -f docker-compose.langfuse.yml up -d
+#   Open http://localhost:3001 → create account → copy API keys to .env
+#
+# In .env (local dev):
+#   LANGFUSE_HOST=http://localhost:3001
+#   LANGFUSE_PUBLIC_KEY=pk-lf-...
+#   LANGFUSE_SECRET_KEY=sk-lf-...
+#
+# In production (cloud-hosted app), use Langfuse Cloud instead:
+#   LANGFUSE_HOST=https://cloud.langfuse.com  (free hobby tier)
+
+services:
+  langfuse-server:
+    image: langfuse/langfuse:latest
+    ports:
+      - "3001:3000"
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db/langfuse
+      NEXTAUTH_SECRET: change-me-local-dev-only
+      SALT: change-me-local-dev-only
+      NEXTAUTH_URL: http://localhost:3001
+      TELEMETRY_ENABLED: "false"
+      # Disable sign-ups after you create your account locally
+      # AUTH_DISABLE_SIGNUP: "true"
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  langfuse-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  langfuse_pg_data:

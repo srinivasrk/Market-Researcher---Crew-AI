@@ -10,6 +10,7 @@ type TrackRecordRow = {
   company_name: string | null
   pick_date: string
   pick_price: number | null
+  current_price: number | null
   return_30d: number | null
   return_60d: number | null
   return_90d: number | null
@@ -92,6 +93,7 @@ export function TrackRecordPage() {
                 <th className="px-4 py-3">Pick</th>
                 <th className="px-4 py-3">Pick Date</th>
                 <th className="px-4 py-3 text-right">Pick Price</th>
+                <th className="px-4 py-3 text-right">Last price</th>
                 <th className="px-4 py-3 text-right">30d</th>
                 <th className="px-4 py-3 text-right">60d</th>
                 <th className="px-4 py-3 text-right">90d</th>
@@ -163,6 +165,12 @@ export function TrackRecordPage() {
                         : <span className="text-on-surface/30">—</span>}
                     </td>
 
+                    <td className="px-4 py-3 text-right tabular-nums text-on-surface/80">
+                      {r.current_price != null && !Number.isNaN(Number(r.current_price))
+                        ? `$${Number(r.current_price).toFixed(2)}`
+                        : <span className="text-on-surface/30">—</span>}
+                    </td>
+
                     {/* Returns */}
                     <td className="px-4 py-3 text-right">
                       <ReturnCell value={r.return_30d} />
@@ -183,7 +191,7 @@ export function TrackRecordPage() {
               {rows?.length === 0 && (
                 <tr key="track-empty">
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className="px-4 py-12 text-center text-sm text-on-surface/55"
                   >
                     No picks yet — run a sector research first.
@@ -194,7 +202,7 @@ export function TrackRecordPage() {
               {rows === null && !error && (
                 <tr key="track-loading">
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className="px-4 py-12 text-center text-sm text-on-surface/55"
                   >
                     Loading prices…

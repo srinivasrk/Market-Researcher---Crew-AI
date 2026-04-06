@@ -24,13 +24,15 @@ from starlette.concurrency import run_in_threadpool
 
 from market_researcher.db import (
     clone_run_for_user,
-    count_user_runs_today,
     get_run,
     get_sector_cache,
     init_db,
     list_runs_for_user,
     normalize_sector,
+    release_free_daily_research_slot,
+    runs_today_for_api,
     set_waitlist_joined,
+    try_reserve_free_daily_research_slot,
     upsert_sector_cache,
     upsert_user_from_claims,
 )
@@ -197,20 +199,8 @@ def _enrich_claims_from_auth0_userinfo(
     if not iss or "auth0.com" not in str(iss).lower():
         return claims
 
-    aud = claims.get("aud")
-    aud_list: list[str]
-    if isinstance(aud, str):
-        aud_list = [aud]
-    elif isinstance(aud, list):
-        aud_list = [str(a) for a in aud]
-    else:
-        aud_list = []
-    scope = str(claims.get("scope") or "")
-    has_userinfo_aud = any(
-        a.rstrip("/").lower().endswith("userinfo") for a in aud_list
-    )
-    if aud_list and not has_userinfo_aud and "openid" not in scope:
-        return claims
+    # SPA + custom API audience: JWT often has aud=[your-api] and no "openid" in scope, so we used
+    # to skip /userinfo entirely — profile stayed empty. Try userinfo anyway; on 403/401 we keep JWT claims.
 
     base = str(iss).rstrip("/")
     url = f"{base}/userinfo"
@@ -396,6 +386,7 @@ async def _run_research_job_lifecycle(job: ResearchJob) -> None:
             job.status = "failed"
             job.error = str(exc)
         on_progress({"type": "job_failed", "error": str(exc)})
+        # Keep free_daily_research_slot: a failed Crew run still spent model $; counts as the daily use.
         return
 
     with job.lock:
@@ -418,6 +409,9 @@ async def _run_research_job_lifecycle(job: ResearchJob) -> None:
             "recommended_ticker": result.recommended_ticker,
         }
     )
+
+    if job.reserved_free_daily_slot:
+        await run_in_threadpool(release_free_daily_research_slot, job.user_id)
 
 
 async def _ws_resolve_claims(websocket: WebSocket) -> dict[str, Any] | None:
@@ -460,6 +454,8 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def _startup() -> None:
         init_db()
+        from market_researcher.observability import setup_observability
+        setup_observability()
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -515,7 +511,7 @@ def create_app() -> FastAPI:
     @app.get("/me", response_model=UserOut)
     def me(claims: dict[str, Any] = Depends(get_claims)) -> UserOut:
         user = upsert_user_from_claims(claims)
-        runs_today = count_user_runs_today(user.id)
+        runs_today = runs_today_for_api(user.id, user.plan)
         return UserOut(
             id=user.id,
             email=user.email,
@@ -545,7 +541,7 @@ def create_app() -> FastAPI:
         set_waitlist_joined(user.id)
         # Re-fetch so waitlist_joined_at is populated from the DB
         user = upsert_user_from_claims(claims)
-        runs_today = count_user_runs_today(user.id)
+        runs_today = runs_today_for_api(user.id, user.plan)
         return UserOut(
             id=user.id,
             email=user.email,
@@ -592,16 +588,18 @@ def create_app() -> FastAPI:
             )
 
         # ── 1. Daily limit (free) — must run before sector cache so cache hits
-        #     cannot bypass the one-run-per-day cap.
-        if user.plan != "pro" and count_user_runs_today(user_id) >= 1:
-            raise HTTPException(
-                status_code=429,
-                detail={
-                    "code": "daily_limit_reached",
-                    "message": "Free plan allows 1 sector research per day. Upgrade to Pro for unlimited access.",
-                    "upgrade_url": "https://stocks.srini.fyi/upgrade",
-                },
-            )
+        #     cannot bypass the one-run-per-day cap. Persisted runs count; a reserved
+        #     slot covers an in-flight Crew job before research_runs is written.
+        if user.plan != "pro":
+            if runs_today_for_api(user_id, user.plan) >= 1:
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "code": "daily_limit_reached",
+                        "message": "Free plan allows 1 sector research per day. Upgrade to Pro for unlimited access.",
+                        "upgrade_url": "https://stocks.srini.fyi/upgrade",
+                    },
+                )
 
         # ── 2. Shared sector cache hit → return instantly, no CrewAI ────────────
         cached = get_sector_cache(sector_norm)
@@ -626,7 +624,25 @@ def create_app() -> FastAPI:
                 return ResearchJobAccepted(job_id=job.job_id)
 
         # ── 3. Launch real CrewAI job (cache is written after completion) ──────
-        job = create_research_job(user_id, sector, body.session_id, claims)
+        reserved = False
+        if user.plan != "pro":
+            reserved = try_reserve_free_daily_research_slot(user_id)
+            if not reserved:
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "code": "daily_limit_reached",
+                        "message": "Free plan allows 1 sector research per day. Upgrade to Pro for unlimited access.",
+                        "upgrade_url": "https://stocks.srini.fyi/upgrade",
+                    },
+                )
+        job = create_research_job(
+            user_id,
+            sector,
+            body.session_id,
+            claims,
+            reserved_free_daily_slot=reserved,
+        )
         asyncio.create_task(_run_research_job_lifecycle(job))
         return ResearchJobAccepted(job_id=job.job_id)
 

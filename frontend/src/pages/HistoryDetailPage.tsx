@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { Link, useParams } from "react-router-dom"
 import { Lock } from "lucide-react"
 import { apiJson } from "../api/client"
+import { LoadingIndicator } from "../components/LoadingIndicator"
 import { PremiumUpsellModal } from "../components/PremiumUpsellModal"
 import {
   ResearchProcessAside,
@@ -112,7 +113,11 @@ export function HistoryDetailPage() {
                 PDF · Pro
               </>
             ) : pdfLoading ? (
-              "Generating…"
+              <LoadingIndicator
+                message="Generating…"
+                size="sm"
+                className="text-on-surface"
+              />
             ) : (
               "↓ Download PDF"
             )}
@@ -127,9 +132,9 @@ export function HistoryDetailPage() {
       ) : null}
 
       {!data && !error ? (
-        <p className="rounded border border-outline-ghost bg-surface px-4 py-8 text-center text-sm text-on-surface/65">
-          Loading…
-        </p>
+        <div className="flex justify-center rounded border border-outline-ghost bg-surface px-4 py-12">
+          <LoadingIndicator layout="stacked" message="Loading…" />
+        </div>
       ) : null}
 
       {data ? (
