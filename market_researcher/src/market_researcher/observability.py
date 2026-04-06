@@ -1,9 +1,9 @@
 """
 Observability setup — AgentOps + Langfuse (via openinference-instrumentation-crewai).
 
-Call setup_observability() once at application startup (api.py lifespan).
-Langfuse initializes the client here; CrewAIInstrumentor runs lazily on first crew run
-(see ensure_crewai_langfuse_instrumentation) so platforms like Fly.io pass health checks quickly.
+AgentOps must initialize on the main thread before any Crew runs (see api.py startup).
+Langfuse client init can run in a background thread (network); CrewAIInstrumentor runs lazily
+on first crew run (ensure_crewai_langfuse_instrumentation) so Fly health checks stay fast.
 
 Per official Langfuse docs (https://langfuse.com/integrations/frameworks/crewai):
   - langfuse.get_client() initialises the Langfuse SDK and wires up OTel internally
@@ -104,7 +104,16 @@ def _setup_agentops() -> bool:
 
     try:
         import agentops
-        agentops.init(api_key=api_key, skip_auto_end_session=True)
+
+        # Default: allow CrewAI to end the AgentOps session after each kickoff() so
+        # events flush. skip_auto_end_session=True (opt-in via env) keeps the session
+        # open but then you must end it yourself or traces may never upload.
+        skip_auto = os.getenv("AGENTOPS_SKIP_AUTO_END_SESSION", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        agentops.init(api_key=api_key, skip_auto_end_session=skip_auto)
         logger.info("AgentOps: initialised successfully.")
         return True
 
@@ -117,7 +126,7 @@ def _setup_agentops() -> bool:
 
 
 def setup_observability() -> None:
-    """Call once at application startup to enable all configured observability tools."""
+    """Call once on the current thread (e.g. local scripts). Initializes Langfuse + AgentOps."""
     langfuse_ok = _setup_langfuse()
     agentops_ok = _setup_agentops()
 
@@ -126,6 +135,16 @@ def setup_observability() -> None:
             "Observability: no keys configured — running without tracing. "
             "Set LANGFUSE_PUBLIC_KEY / AGENTOPS_API_KEY to enable."
         )
+
+
+def init_agentops_sync() -> bool:
+    """Initialize AgentOps on the main thread before Crew runs (FastAPI startup)."""
+    return _setup_agentops()
+
+
+def init_langfuse_sync() -> bool:
+    """Initialize Langfuse client (may perform network I/O)."""
+    return _setup_langfuse()
 
 
 def flush_langfuse() -> None:

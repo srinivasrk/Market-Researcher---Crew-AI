@@ -455,14 +455,16 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def _startup() -> None:
         init_db()
-        # Langfuse auth_check / AgentOps can block on network; Starlette runs startup
-        # before accepting TCP — defer so Fly health checks see :8000 listening immediately.
-        def _setup_obs() -> None:
-            from market_researcher.observability import setup_observability
+        # AgentOps must register before Crew imports/kickoff (main thread). Langfuse
+        # auth_check can block — run only that in a daemon thread so :8000 listens quickly.
+        from market_researcher.observability import init_agentops_sync, init_langfuse_sync
 
-            setup_observability()
+        init_agentops_sync()
 
-        threading.Thread(target=_setup_obs, daemon=True).start()
+        def _langfuse_only() -> None:
+            init_langfuse_sync()
+
+        threading.Thread(target=_langfuse_only, daemon=True).start()
 
     @app.get("/health")
     def health() -> dict[str, str]:
