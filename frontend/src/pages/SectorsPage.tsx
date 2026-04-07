@@ -9,6 +9,7 @@ import { getSectorTileTheme } from "../data/sectorTileThemes"
 import { useActiveResearchRun } from "../session/ActiveResearchRunContext"
 import { useSession } from "../session/SessionContext"
 import { useUserProfile } from "../session/UserProfileContext"
+import { useTrack } from "../hooks/useTrack"
 import {
   ResearchProgressPanel,
   type ResearchModalConnection,
@@ -55,6 +56,7 @@ function gridSpanClass(layout: CardLayout): string {
 export function SectorsPage() {
   const { getAccessToken } = useSession()
   const { me, refreshProfile } = useUserProfile()
+  const { track } = useTrack()
   const {
     deferredLiveModal,
     consumeDeferredLiveModal,
@@ -139,6 +141,7 @@ export function SectorsPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ sector }),
         })
+        track("feature_use", "run_research", { sector })
         await refreshProfile()
         setResearchModal({
           sector,
@@ -187,6 +190,7 @@ export function SectorsPage() {
   const handleTileClick = useCallback(
     (sector: string) => {
       if (isProOnlySector(sector) || hasUsedDailySlot) {
+        track("feature_use", "upsell_triggered", { sector })
         setUpsellOpen(true)
       } else {
         void startResearch(sector)

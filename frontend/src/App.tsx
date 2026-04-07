@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom"
 import { AppShell } from "./components/AppShell"
+import { AdminAnalyticsPage } from "./pages/AdminAnalyticsPage"
 import { DashboardPage } from "./pages/DashboardPage"
 import { HistoryDetailPage } from "./pages/HistoryDetailPage"
 import { HistoryPage } from "./pages/HistoryPage"
@@ -11,6 +12,7 @@ import { IndexRedirect } from "./routes/IndexRedirect"
 import { ProtectedRoute } from "./routes/ProtectedRoute"
 import { UnauthorizedBridge } from "./routes/UnauthorizedBridge"
 import { ActiveResearchRunProvider } from "./session/ActiveResearchRunContext"
+import { TrackingProvider } from "./session/TrackingProvider"
 import { UserProfileProvider } from "./session/UserProfileContext"
 
 export default function App() {
@@ -26,7 +28,9 @@ export default function App() {
             <ProtectedRoute>
               <UserProfileProvider>
                 <ActiveResearchRunProvider>
-                  <AppShell />
+                  <TrackingProvider>
+                    <AppShell />
+                  </TrackingProvider>
                 </ActiveResearchRunProvider>
               </UserProfileProvider>
             </ProtectedRoute>
@@ -39,6 +43,7 @@ export default function App() {
           <Route path="history/:runId" element={<HistoryDetailPage />} />
           <Route path="track-record" element={<TrackRecordPage />} />
           <Route path="upgrade" element={<UpgradePage />} />
+          <Route path="admin/analytics" element={<AdminAnalyticsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

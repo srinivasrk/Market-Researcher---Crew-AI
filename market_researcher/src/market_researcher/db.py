@@ -152,6 +152,24 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
                 reserved_at  TEXT NOT NULL,
                 PRIMARY KEY (user_id, day_utc)
             );
+
+            CREATE TABLE IF NOT EXISTS activity_events (
+                id             TEXT PRIMARY KEY,
+                user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                event_type     TEXT NOT NULL,
+                event_name     TEXT NOT NULL,
+                properties_json TEXT,
+                created_at     TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_events_user_created
+                ON activity_events (user_id, created_at DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_events_type_created
+                ON activity_events (event_type, created_at DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_events_day
+                ON activity_events (created_at DESC);
             """
         )
         conn.commit()
@@ -919,6 +937,207 @@ def upsert_showcase_snapshot(
         )
         if own:
             conn.commit()
+    finally:
+        if own:
+            conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Activity tracking — user events for the admin analytics dashboard
+# ---------------------------------------------------------------------------
+
+def is_admin_email(email: str | None) -> bool:
+    """Return True if `email` is listed in the ADMIN_EMAILS env var (comma-separated)."""
+    if not email:
+        return False
+    raw = os.getenv("ADMIN_EMAILS", "").strip()
+    if not raw:
+        return False
+    admin_set = {e.strip().lower() for e in raw.split(",") if e.strip()}
+    return email.strip().lower() in admin_set
+
+
+def insert_activity_event(
+    user_id: str,
+    event_type: str,
+    event_name: str,
+    properties: dict[str, Any] | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    """Persist a single user activity event. Errors are silently swallowed — tracking
+    must never crash or slow down the application."""
+    own = conn is None
+    if conn is None:
+        conn = get_connection()
+    try:
+        event_id = str(uuid.uuid4())
+        now = _iso(utc_now())
+        props_json = json.dumps(properties, default=str) if properties else None
+        conn.execute(
+            """
+            INSERT INTO activity_events (id, user_id, event_type, event_name, properties_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (event_id, user_id, event_type, event_name, props_json, now),
+        )
+        conn.commit()
+    except Exception:
+        pass  # tracking must never raise
+    finally:
+        if own:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def get_analytics_summary(days: int = 30, conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+    """Return aggregated analytics stats for the admin dashboard."""
+    own = conn is None
+    if conn is None:
+        conn = get_connection()
+    try:
+        now = utc_now()
+        cutoff = _iso(now - timedelta(days=days))
+        cutoff_30 = _iso(now - timedelta(days=30))
+        cutoff_7 = _iso(now - timedelta(days=7))
+        cutoff_1 = _iso(now - timedelta(hours=24))
+
+        # ── Totals ──────────────────────────────────────────────────────────
+        total_users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+
+        dau = conn.execute(
+            "SELECT COUNT(DISTINCT user_id) FROM activity_events WHERE created_at >= ?",
+            (cutoff_1,),
+        ).fetchone()[0]
+        wau = conn.execute(
+            "SELECT COUNT(DISTINCT user_id) FROM activity_events WHERE created_at >= ?",
+            (cutoff_7,),
+        ).fetchone()[0]
+        mau = conn.execute(
+            "SELECT COUNT(DISTINCT user_id) FROM activity_events WHERE created_at >= ?",
+            (cutoff_30,),
+        ).fetchone()[0]
+
+        total_events = conn.execute(
+            "SELECT COUNT(*) FROM activity_events WHERE created_at >= ?", (cutoff,)
+        ).fetchone()[0]
+
+        # ── Events by day (sparkline data) ──────────────────────────────────
+        events_by_day = [
+            {"date": r["date"], "count": r["count"]}
+            for r in conn.execute(
+                """
+                SELECT substr(created_at, 1, 10) as date, COUNT(*) as count
+                FROM activity_events WHERE created_at >= ?
+                GROUP BY date ORDER BY date ASC
+                """,
+                (cutoff,),
+            ).fetchall()
+        ]
+
+        # ── New users by day ─────────────────────────────────────────────────
+        new_users_by_day = [
+            {"date": r["date"], "count": r["count"]}
+            for r in conn.execute(
+                """
+                SELECT substr(created_at, 1, 10) as date, COUNT(*) as count
+                FROM users WHERE created_at >= ?
+                GROUP BY date ORDER BY date ASC
+                """,
+                (cutoff,),
+            ).fetchall()
+        ]
+
+        # ── Page views ───────────────────────────────────────────────────────
+        page_views = [
+            {"name": r["event_name"], "count": r["count"]}
+            for r in conn.execute(
+                """
+                SELECT event_name, COUNT(*) as count
+                FROM activity_events
+                WHERE event_type = 'page_view' AND created_at >= ?
+                GROUP BY event_name ORDER BY count DESC LIMIT 20
+                """,
+                (cutoff,),
+            ).fetchall()
+        ]
+
+        # ── Feature usage ────────────────────────────────────────────────────
+        feature_uses = [
+            {"name": r["event_name"], "count": r["count"]}
+            for r in conn.execute(
+                """
+                SELECT event_name, COUNT(*) as count
+                FROM activity_events
+                WHERE event_type = 'feature_use' AND created_at >= ?
+                GROUP BY event_name ORDER BY count DESC LIMIT 20
+                """,
+                (cutoff,),
+            ).fetchall()
+        ]
+
+        # ── API calls (with error count per endpoint) ────────────────────────
+        api_calls = [
+            {
+                "name": r["event_name"],
+                "count": r["count"],
+                "error_count": r["error_count"],
+            }
+            for r in conn.execute(
+                """
+                SELECT event_name,
+                       COUNT(*) as count,
+                       SUM(
+                           CASE WHEN CAST(json_extract(properties_json, '$.status_code') AS INTEGER) >= 400
+                                THEN 1 ELSE 0 END
+                       ) as error_count
+                FROM activity_events
+                WHERE event_type = 'api_call' AND created_at >= ?
+                GROUP BY event_name ORDER BY count DESC LIMIT 20
+                """,
+                (cutoff,),
+            ).fetchall()
+        ]
+
+        # ── Top users by activity ────────────────────────────────────────────
+        top_users = [
+            {
+                "user_id": r["user_id"],
+                "email": r["email"],
+                "name": r["name"],
+                "event_count": r["event_count"],
+                "last_seen": r["last_seen"],
+            }
+            for r in conn.execute(
+                """
+                SELECT ae.user_id, u.email, u.name,
+                       COUNT(*) as event_count,
+                       MAX(ae.created_at) as last_seen
+                FROM activity_events ae
+                LEFT JOIN users u ON u.id = ae.user_id
+                WHERE ae.created_at >= ?
+                GROUP BY ae.user_id
+                ORDER BY event_count DESC LIMIT 20
+                """,
+                (cutoff,),
+            ).fetchall()
+        ]
+
+        return {
+            "total_users": total_users,
+            "dau": dau,
+            "wau": wau,
+            "mau": mau,
+            "total_events": total_events,
+            "events_by_day": events_by_day,
+            "new_users_by_day": new_users_by_day,
+            "page_views": page_views,
+            "feature_uses": feature_uses,
+            "api_calls": api_calls,
+            "top_users": top_users,
+            "window_days": days,
+        }
     finally:
         if own:
             conn.close()

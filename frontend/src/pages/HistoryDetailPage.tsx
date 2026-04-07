@@ -11,11 +11,13 @@ import {
 } from "../components/ResearchRunViews"
 import { API_BASE_URL } from "../lib/config"
 import { useSession } from "../session/SessionContext"
+import { useTrack } from "../hooks/useTrack"
 import type { ResearchRunDetail, UserOut } from "../api/types"
 
 export function HistoryDetailPage() {
   const { runId } = useParams()
   const { getAccessToken } = useSession()
+  const { track } = useTrack()
   const [data, setData] = useState<ResearchRunDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [pdfLoading, setPdfLoading] = useState(false)
@@ -40,7 +42,14 @@ export function HistoryDetailPage() {
         const row = await apiJson<ResearchRunDetail>(`/research/${runId}`, {
           accessToken: token,
         })
-        if (!cancelled) setData(row)
+        if (!cancelled) {
+          setData(row)
+          track("feature_use", "view_report", {
+            run_id: runId,
+            sector: row.sector,
+            ticker: row.recommended_ticker,
+          })
+        }
       } catch (e) {
         if (!cancelled)
           setError(e instanceof Error ? e.message : "Failed to load run")

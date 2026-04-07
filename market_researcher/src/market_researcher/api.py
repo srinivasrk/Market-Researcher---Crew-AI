@@ -7,6 +7,7 @@ import io
 import json
 import os
 import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -22,12 +23,17 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 
 from market_researcher.db import (
     clone_run_for_user,
+    get_analytics_summary,
     get_run,
     get_sector_cache,
     init_db,
+    insert_activity_event,
+    is_admin_email,
     list_runs_for_user,
     normalize_sector,
     release_free_daily_research_slot,
@@ -351,6 +357,58 @@ class DevTokenOut(BaseModel):
     expires_in: int
 
 
+# Paths that generate too much noise or are self-referential — skip tracking them.
+_TRACKING_SKIP_PATHS = frozenset({"/health", "/track", "/admin/analytics"})
+
+
+class ActivityLoggingMiddleware(BaseHTTPMiddleware):
+    """Log every authenticated API call to activity_events (fire-and-forget thread)."""
+
+    async def dispatch(self, request: Request, call_next: Any) -> Any:
+        start = time.monotonic()
+        response = await call_next(request)
+        path = request.url.path
+
+        # Skip noisy / self-referential paths and non-GET/POST verbs on static assets
+        if path in _TRACKING_SKIP_PATHS or path.startswith("/research/ws/"):
+            return response
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        auth_header = request.headers.get("Authorization", "")
+        user_id: str | None = None
+
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+            if _bearer_looks_like_jwt(token):
+                try:
+                    unverified = jwt.decode(token, options={"verify_signature": False})
+                    sub = unverified.get("sub") or unverified.get("user_id")
+                    user_id = str(sub).strip() if sub else None
+                except Exception:
+                    pass
+
+        if user_id:
+            props = {
+                "status_code": response.status_code,
+                "duration_ms": duration_ms,
+                "method": request.method,
+            }
+            threading.Thread(
+                target=insert_activity_event,
+                args=(user_id, "api_call", f"{request.method} {path}"),
+                kwargs={"properties": props},
+                daemon=True,
+            ).start()
+
+        return response
+
+
+class TrackRequest(BaseModel):
+    event_type: str = Field(..., pattern=r"^(page_view|feature_use|session_start|session_end)$")
+    event_name: str = Field(..., min_length=1, max_length=512)
+    properties: dict[str, Any] | None = None
+
+
 async def _run_research_job_lifecycle(job: ResearchJob) -> None:
     loop = asyncio.get_event_loop()
 
@@ -451,6 +509,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(ActivityLoggingMiddleware)
 
     @app.on_event("startup")
     def _startup() -> None:
@@ -569,6 +628,34 @@ def create_app() -> FastAPI:
             waitlist_joined=user.waitlist_joined,
             waitlist_joined_at=user.waitlist_joined_at,
         )
+
+    @app.post("/track", status_code=204)
+    def track_event(
+        body: TrackRequest,
+        claims: dict[str, Any] = Depends(get_claims),
+    ) -> None:
+        """Ingest a frontend activity event (page_view, feature_use, session_start/end)."""
+        user_id = str(claims.get("sub") or claims.get("user_id") or "")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Token missing sub")
+        # Persist in a daemon thread so the 204 response returns immediately
+        threading.Thread(
+            target=insert_activity_event,
+            args=(user_id, body.event_type, body.event_name),
+            kwargs={"properties": body.properties},
+            daemon=True,
+        ).start()
+
+    @app.get("/admin/analytics")
+    def admin_analytics(
+        days: int = 30,
+        claims: dict[str, Any] = Depends(get_claims),
+    ) -> dict[str, Any]:
+        """Aggregated activity analytics — admin only (ADMIN_EMAILS env var)."""
+        user = upsert_user_from_claims(claims)
+        if not is_admin_email(user.email):
+            raise HTTPException(status_code=403, detail="Admin access required")
+        return get_analytics_summary(days=min(max(days, 1), 365))
 
     @app.post("/research", response_model=ResearchJobAccepted)
     async def research(

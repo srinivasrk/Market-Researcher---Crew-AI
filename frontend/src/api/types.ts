@@ -95,3 +95,36 @@ export type WsServerMessage =
   | { type: "replay"; events: unknown[] }
   | { type: "heartbeat" }
   | { type: string; [key: string]: unknown }
+
+// ---------------------------------------------------------------------------
+// Admin analytics types
+// ---------------------------------------------------------------------------
+
+export type AnalyticsCountRow = { name: string; count: number }
+
+export type AnalyticsApiCallRow = { name: string; count: number; error_count: number }
+
+export type AnalyticsDayRow = { date: string; count: number }
+
+export type AnalyticsUserRow = {
+  user_id: string
+  email: string | null
+  name: string | null
+  event_count: number
+  last_seen: string
+}
+
+export type AnalyticsSummary = {
+  total_users: number
+  dau: number
+  wau: number
+  mau: number
+  total_events: number
+  window_days: number
+  events_by_day: AnalyticsDayRow[]
+  new_users_by_day: AnalyticsDayRow[]
+  page_views: AnalyticsCountRow[]
+  feature_uses: AnalyticsCountRow[]
+  api_calls: AnalyticsApiCallRow[]
+  top_users: AnalyticsUserRow[]
+}
